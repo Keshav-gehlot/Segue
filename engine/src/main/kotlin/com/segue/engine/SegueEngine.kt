@@ -293,6 +293,8 @@ class SegueEngine(
         coord("player started") { it.onPlayerStarted(ok) }
         broadcastStatus(); publish()
     }
+    /** The player's state changed outside a command (track change, playback left this phone). */
+    fun onPlayerChanged() = onLoop { log("player_cb", "changed playing=${platformPlayer.isPlaying()}"); broadcastStatus(); publish() }
     fun onRouteChanged() = onLoop { log("route", "ready=${routeReady()}"); broadcastStatus(); publish() }
     /** Free-form line in the event log (device build, test notes). */
     fun note(kind: String, detail: String) = onLoop { log(kind, detail) }

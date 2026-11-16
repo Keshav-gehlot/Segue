@@ -107,6 +107,8 @@ class MainActivity : ComponentActivity() {
     private fun extras() = service?.let { s ->
         UiExtras(
             routeDescription = s.route.describe(),
+            earbudsReady = s.route.isReady(),
+            spotify = s.spotify?.view()?.let { v -> SpotifyUi(v.connected, v.status, v.title, v.artist, v.needsClientId) },
             transportError = s.transport.lastError,
             foregroundError = s.foregroundError,
             logPath = s.eventLog?.file?.absolutePath
@@ -130,6 +132,16 @@ class MainActivity : ComponentActivity() {
         override fun pause() { service?.engine?.pause() }
         override fun handoff(peerId: Int) { service?.engine?.handoffTo(peerId) }
         override fun pull() { service?.engine?.pullHere() }
+        override fun useSpotify(on: Boolean) {
+            val s = service ?: return
+            s.setPlayerMode(if (on) SegueService.MODE_SPOTIFY else SegueService.MODE_REFERENCE)
+            ui = ui.copy(extras = extras())
+        }
+        override fun connectSpotify() { service?.spotify?.connect(true) }
+        override fun setSpotifyClientId(id: String) {
+            service?.spotifyClientId = id
+            ui = ui.copy(extras = extras())
+        }
         override fun startPairing() { service?.engine?.beginPairing() }
         override fun confirmPairing(match: Boolean) { service?.engine?.confirmPairing(match) }
         override fun cancelPairing() { service?.engine?.cancelPairing() }

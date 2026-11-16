@@ -12,8 +12,8 @@ android {
         applicationId = "com.segue.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
     }
 
     // A fixed debug key, committed on purpose: every build (local or CI) is signed alike, so a newer
@@ -49,4 +49,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
     implementation(libs.play.services.nearby)
+    // Spotify App Remote SDK: distributed as a file only (see app/libs/README.md). It needs Gson at run time.
+    implementation(files("libs/spotify-app-remote-release-0.8.0.aar"))
+    implementation(libs.gson)
 }

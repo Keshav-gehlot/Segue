@@ -74,6 +74,36 @@ Every device should then list the other two as connected.
 3. Listen: there is one chirp per second, and its pitch rises step by step through each 10-second cycle. A handoff should leave a short silence but never repeat or skip a pitch.
 4. All three devices should show *Earbuds: ready*, and the Pad 3 should show where it is playing.
 
+## 4b. Spotify (Premium)
+
+Segue controls the Spotify app through Spotify's own SDK, which needs a Spotify developer app. Once:
+
+1. Go to developer.spotify.com/dashboard, log in with the Premium account, and choose **Create app**.
+2. Name and description: anything (for example *Segue*). **Redirect URI:** `segue://callback`
+3. Under *Which API/SDKs are you planning to use?* tick **Android**, then add the Android package:
+   - Package name: `com.segue.app`
+   - SHA1 fingerprint: `F9:E2:E7:56:12:1C:2C:3A:FF:11:6B:B6:75:C1:CF:C5:A4:E2:91:B3`
+4. Save, open the app's **Settings**, and copy the **Client ID** (32 characters).
+5. If the devices use Spotify accounts other than the one that created the app, add them under **User Management**.
+
+On each device:
+
+1. Install Spotify and log in. Play any song once, so Spotify has something loaded.
+2. In Segue, turn on **Use Spotify**. Paste the Client ID and tap **Save and connect** (not needed once the ID is built into the APK).
+3. Spotify asks once whether Segue may control it. Tap **Agree**. Segue then shows *Spotify: Connected*.
+
+Then play a song in Spotify on one device. Segue shows the song and *Playing on this phone*. Tap **Send to …**, or on the
+other device tap **Move playback here**. The music should stop on the first device and continue on the second from the same place.
+
+Things to know:
+
+- **Use Spotify** must be set the same on every device. The automated tests in section 5 need it off.
+- With one Spotify account on all devices, Segue asks Spotify to move its own session, so the queue comes along.
+  With different accounts, only the current track and position move.
+- Spotify takes longer to start than the test track, so expect a gap of about a second.
+- This part has not been tried on real devices yet. If it misbehaves, export the logs: they record every Spotify state change
+  and every command Segue sent.
+
 ## 5. Automated test runs
 
 The app runs the test cases itself. One device, the **conductor**, drives the run; the other is the

@@ -15,11 +15,14 @@ import android.util.Log
 import com.segue.app.bench.EventLogFile
 import com.segue.app.player.MediaControls
 import com.segue.app.player.ReferencePlayer
+import com.segue.app.player.SpotifyPlayer
 import com.segue.app.route.RouteMonitor
 import com.segue.app.store.BootId
 import com.segue.app.store.KeystoreIdentity
 import com.segue.app.transport.NearbyTransport
+import com.segue.core.CoordinatorConfig
 import com.segue.core.Identity
+import com.segue.core.PlayerPort
 import com.segue.core.Rollback
 import com.segue.engine.Campaign
 import com.segue.engine.CampaignStatus
@@ -31,6 +34,7 @@ import com.segue.engine.ExecutorScheduler
 import com.segue.engine.FileStore
 import com.segue.engine.LogExport
 import com.segue.engine.SegueEngine
+import com.segue.engine.SpotifyController
 import java.io.File
 import java.io.OutputStream
 import java.util.concurrent.CopyOnWriteArrayList
@@ -55,7 +59,9 @@ class SegueService : Service(), EngineListener {
     private val main = Handler(Looper.getMainLooper())
     private val uiListeners = CopyOnWriteArrayList<(EngineState) -> Unit>()
     private lateinit var scheduler: ExecutorScheduler
-    private lateinit var player: ReferencePlayer
+    private lateinit var player: PlayerPort
+    private var reference: ReferencePlayer? = null
+    var spotify: SpotifyPlayer? = null; private set
     private lateinit var identity: Identity
     private lateinit var config: EngineConfig
     lateinit var route: RouteMonitor; private set
@@ -78,6 +84,22 @@ class SegueService : Service(), EngineListener {
             engine.note("test_mode", "on=$value")
         }
 
+    /** Which player Segue controls on this device: [MODE_REFERENCE] (built-in test track) or [MODE_SPOTIFY]. */
+    val playerMode: String
+        get() = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PLAYER, MODE_REFERENCE) ?: MODE_REFERENCE
+
+    /** Client ID of the Spotify developer app: built in (res/values/spotify.xml) or typed in by the user. */
+    var spotifyClientId: String
+        get() = getString(com.segue.app.R.string.spotify_client_id).trim().ifEmpty {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_SPOTIFY_CLIENT, "") ?: ""
+        }
+        set(value) {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_SPOTIFY_CLIENT, value.trim()).apply()
+            engine.note("spotify", "client id set (${value.trim().length} chars)")
+            spotify?.connect(true)
+            engine.refresh()
+        }
+
     override fun onCreate() {
         super.onCreate()
         Notifications.createChannel(this)
@@ -85,20 +107,62 @@ class SegueService : Service(), EngineListener {
         eventLog = EventLogFile.open(this)
         config = EngineConfig(label = Background.deviceLabel(this).take(40))
         identity = KeystoreIdentity.loadOrCreate()
-        player = ReferencePlayer(this, object : ReferencePlayer.Listener {
-            override fun onPaused() = engine.onPlayerPaused()
-            override fun onStarted(ok: Boolean) = engine.onPlayerStarted(ok)
-            override fun onExternalStop() = engine.pause()
-        }, startTimeoutMs = config.coordinator.startBudgetMs - 50)
         route = RouteMonitor(this) { engine.onRouteChanged() }
+        buildPlayer()
         transport = NearbyTransport(this)
         campaign = Campaign(scheduler, { engine }) { st ->
             campaignStatus = st
             main.post { onCampaign?.invoke(st) }
         }
         startEngine()
-        media = MediaControls(this, onPlay = { engine.play() }, onPause = { engine.pause() })
         route.start()
+    }
+
+    /**
+     * Create the player for the current mode and the timing that goes with it. Main thread; no
+     * engine may be running. Spotify answers far slower than the built-in player, so the lease
+     * window and the start and pause budgets are longer; both devices derive them from the mode,
+     * and a device in the other mode refuses the transferred state, so it never plays.
+     */
+    private fun buildPlayer() {
+        reference?.release(); reference = null
+        spotify?.release(); spotify = null
+        media?.release(); media = null
+        val rollback = config.coordinator.rollback
+        if (playerMode == MODE_SPOTIFY) {
+            val c = SpotifyController.coordinatorConfig(rollback)
+            config = config.copy(coordinator = c)
+            val p = SpotifyPlayer(this, clientId = { spotifyClientId }, listener = SpotifyController.listenerFor { engine },
+                startTimeoutMs = c.startBudgetMs - 100, pauseTimeoutMs = c.pauseBudgetMs - 200,
+                log = { engine.note("spotify", it) }, onViewChanged = { engine.onPlayerChanged() })
+            spotify = p
+            player = p.port
+            // No media session of our own here: it would compete with Spotify's for the earbuds' buttons.
+        } else {
+            config = config.copy(coordinator = CoordinatorConfig(rollback = rollback))
+            val p = ReferencePlayer(this, object : ReferencePlayer.Listener {
+                override fun onPaused() = engine.onPlayerPaused()
+                override fun onStarted(ok: Boolean) = engine.onPlayerStarted(ok)
+                override fun onExternalStop() = engine.pause()
+            }, startTimeoutMs = config.coordinator.startBudgetMs - 50)
+            reference = p
+            player = p
+            media = MediaControls(this, onPlay = { engine.play() }, onPause = { engine.pause() })
+        }
+    }
+
+    /** Switch between the built-in test track and Spotify. Stops playback here and restarts the engine. */
+    fun setPlayerMode(mode: String) {
+        if (mode == playerMode || (mode != MODE_SPOTIFY && mode != MODE_REFERENCE)) return
+        campaign.stop()
+        engine.note("player_mode", mode)
+        engine.halt()
+        transport.dropAll()
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_PLAYER, mode).apply()
+        buildPlayer()
+        lastSummary = null
+        startEngine()
+        spotify?.connect(true)
     }
 
     /** Create an engine from the stored state and start it. Main thread. */
@@ -108,7 +172,8 @@ class SegueService : Service(), EngineListener {
             store = FileStore(File(filesDir, "engine")),
             sched = scheduler,
             platformPlayer = player,
-            routeReady = { route.isReady() },
+            // "Ready to receive playback": the earbuds are routed here and, for Spotify, the app answers.
+            routeReady = { route.isReady() && (spotify?.ready() ?: true) },
             transport = transport,
             cfg = config,
             bootId = BootId.read(this),
@@ -120,6 +185,8 @@ class SegueService : Service(), EngineListener {
         transport.engine = e
         e.start()
         e.note("device", Background.describeDevice(this))
+        e.note("player_mode", playerMode + " W=" + config.coordinator.windowMs + " b_start=" + config.coordinator.startBudgetMs)
+        spotify?.connect(false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -148,7 +215,8 @@ class SegueService : Service(), EngineListener {
         campaign.stop()
         engine.stop()
         route.stop()
-        player.release()
+        reference?.release()
+        spotify?.release()
         transport.shutdown()
         media?.release()
         main.postDelayed({ scheduler.shutdown(); eventLog?.close() }, 500)
@@ -225,6 +293,8 @@ class SegueService : Service(), EngineListener {
                 for (p in s.peers) append("peer=").append(p.id).append(" label=").append(p.label).append(" connected=").append(p.connected).append('\n')
             }
             append("test_mode=").append(testMode).append('\n')
+            append("player_mode=").append(playerMode).append('\n')
+            spotify?.view()?.let { v -> append("spotify=").append(v.status).append(" connected=").append(v.connected).append('\n') }
             append("exported_wall_ms=").append(System.currentTimeMillis()).append('\n')
         }
         return LogExport.zip(out, logFiles(), mapOf("device.txt" to info))
@@ -244,5 +314,9 @@ class SegueService : Service(), EngineListener {
         private const val TAG = "SegueService"
         private const val PREFS = "segue"
         private const val KEY_TEST_MODE = "test_mode"
+        private const val KEY_PLAYER = "player"
+        private const val KEY_SPOTIFY_CLIENT = "spotify_client_id"
+        const val MODE_REFERENCE = "reference"
+        const val MODE_SPOTIFY = "spotify"
     }
 }

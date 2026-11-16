@@ -4,8 +4,21 @@ import com.segue.engine.Campaign
 import com.segue.engine.CampaignStatus
 import com.segue.engine.EngineState
 
+/** Spotify's side of things, when Segue controls Spotify on this device. */
+data class SpotifyUi(
+    val connected: Boolean = false,
+    val status: String = "",
+    val title: String? = null,
+    val artist: String? = null,
+    val needsClientId: Boolean = false
+)
+
 data class UiExtras(
     val routeDescription: String = "",
+    /** The earbuds are routed to this device (independent of the player). */
+    val earbudsReady: Boolean = false,
+    /** null: the built-in test track is the player. */
+    val spotify: SpotifyUi? = null,
     val transportError: String? = null,
     val foregroundError: String? = null,
     val logPath: String? = null
@@ -35,6 +48,9 @@ interface UiActions {
     fun pause()
     fun handoff(peerId: Int)
     fun pull()
+    fun useSpotify(on: Boolean)
+    fun connectSpotify()
+    fun setSpotifyClientId(id: String)
     fun startPairing()
     fun confirmPairing(match: Boolean)
     fun cancelPairing()
@@ -74,7 +90,7 @@ object Describe {
         if (!p.connected) return "Not connected"
         val st = p.status ?: return "Connected"
         val play = if (st.playing) "playing" else "idle"
-        val route = if (st.routeReady) "earbuds ready" else "earbuds not routed here"
+        val route = if (st.routeReady) "ready to receive" else "not ready to receive"
         val rtt = p.rttMs?.let { " · ${it} ms" } ?: ""
         return "Connected · $play · $route$rtt"
     }
@@ -95,6 +111,15 @@ object Describe {
 
     fun exportName(label: String, stamp: String): String =
         "segue-logs-" + label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "device" } + "-" + stamp + ".zip"
+
+    fun nowPlaying(sp: SpotifyUi): String? = when {
+        sp.title.isNullOrBlank() -> null
+        sp.artist.isNullOrBlank() -> sp.title
+        else -> "${sp.title} · ${sp.artist}"
+    }
+
+    /** A Spotify Client ID is 32 hexadecimal characters. */
+    fun looksLikeClientId(text: String): Boolean = Regex("[0-9a-fA-F]{32}").matches(text.trim())
 
     fun canSendTo(s: EngineState, p: com.segue.engine.PeerView): Boolean =
         s.playing && s.iAmOwner && s.phase == "IDLE" && p.connected && p.status?.routeReady == true

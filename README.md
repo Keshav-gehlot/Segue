@@ -18,7 +18,7 @@ device measurements; [`TESTING.md`](TESTING.md) is the plan for collecting them.
 core/     protocol: HandoffCoordinator, handshake, SecureChannel, codecs (pure Kotlin)
           core/src/test: fault-injection simulator, security experiments, self-tests
 engine/   links, SAS pairing, write-ahead persistence, ownership sync, test campaign, log export (pure Kotlin)
-app/      Android: foreground service, Nearby Connections, audio-route check,
+app/      Android: foreground service, Nearby Connections, audio-route check, Spotify binding,
           AudioTrack reference player, Keystore identity, Compose UI, fault injection
 results/  outputs of the simulation and security runs reported in the paper, and figures
 scripts/  analyze_handoffs.py (device logs), measure_audio.py (microphone recordings),
@@ -33,10 +33,11 @@ TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8
 | Part | Status |
 |---|---|
 | `:core` | Self-tests pass (20 checks). Since the simulation was first reported: state export/import, `allowHandoffHere()`, and one fix found by the automated campaign (a target that crashed after stopping but before starting resumed a stale position instead of the transferred snapshot). The simulation was re-run with the fix: 24 of 120 rows moved by one or two attempts; pooled dual playback and the paper's tables are unchanged. `results/` holds the re-run. |
-| `:engine` | 70 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth, the log export, and reconnection with Nearby-like discovery (one report per session, one-sided discovery). |
+| `:engine` | 90 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth, the log export, reconnection with Nearby-like discovery (one report per session, one-sided discovery), and the Spotify controller against a model of Spotify Connect (one account and two accounts). |
 | Android app (`:app`, including the Compose UI and the Nearby Connections binding) | **Builds.** GitHub Actions compiles it against the real libraries and produces a debug APK on every push (first green build: 16 Nov 2026). |
 | Automated device tests | The in-app campaign (Testing card) and log export are built and pass in simulation; see `TESTING.md`. |
-| Running on devices | **Not done yet.** Nothing has run on a phone or tablet; `TESTING.md` is the plan. |
+| Spotify | The adapter is built and its logic passes against a model of how Spotify behaves. **It has not yet run against the real Spotify app.** |
+| Running on devices | Installed and paired on the test devices. **No measurements yet**; `TESTING.md` is the plan. |
 | `scripts/analyze_handoffs.py` | Checked on the engine-test logs: it recovers handoff timing exactly and classifies every campaign case and overlap with 0 mismatches against ground truth. Accepts exported ZIPs. |
 | `scripts/measure_audio.py` | Checked on synthetic recordings with known gaps (250–410 ms), position errors (−40 to +100 ms) and a 6 dB level change between phones. All edges were within ±2 ms. |
 
@@ -143,7 +144,7 @@ These are implementation choices the paper's implementation section should menti
 
 ## Known limitations
 
-- **Players.** Only the in-app reference player exists. The Spotify (App Remote) and MediaSession adapters from the plan come next.
+- **Players.** The built-in test track and Spotify (Premium, through Spotify's App Remote SDK; see `TESTING.md`). With Spotify, only the current track and position move when the devices use different accounts; with one account Spotify moves its whole session. Segue cannot tell Spotify's audio from another app's: if a second app plays media on a device while Spotify is playing elsewhere on the same account, Segue may take that as Spotify starting there.
 - **No automatic trigger yet.** Handoffs are push, pull or claim, as the handover recommends until reliable proximity signals exist.
 - **Battery.** Nearby advertising and discovery run whenever Segue is on.
 - **Restart after process death.** Android's background-start limits may stop the foreground service from coming back on its own. Reopening the app restarts it.

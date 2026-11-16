@@ -80,3 +80,13 @@ The system is now called **Segue** (was AutoPlay); the paper title starts "Segue
 ## Reconnection fix (16 Nov 2026, v0.2.1)
 
 First device report: phones paired but never connected. Cause: Nearby reports each advertiser once per discovery session, and only the lower id initiated. A peer seen while a link was up, or after a failed request, or never seen by the lower id (one-sided discovery), was never retried. Fix: discovery restarts after every drop or failure and every 15 s while a member is missing; the higher id also initiates after 8 s; a duplicate link is resolved by keeping the one the lower id initiated. The test radio now models one report per session and one-sided discovery; the old engine fails the 9 new checks (7 of them) and the fixed one passes all 70.
+
+## Spotify adapter (16 Nov 2026, v0.3.0)
+
+| Area | Change |
+|---|---|
+| Engine | `SpotifyController`: drives the Spotify app as the coordinator's player. Decides "playing here" from Spotify's state plus local audio, never pauses a session that is on another device, starts with Spotify's own transfer and falls back to play-by-URI and seek. Longer timing in this mode (W = 10 s, b_start = 5 s, b_pause = 1.5 s). |
+| App | Binding to the Spotify App Remote SDK 0.8.0 (kept in `app/libs`, Apache 2.0), a *Use Spotify* switch, connection and approval, now-playing line. |
+| Tests | A model of Spotify Connect (one shared session per account; commands act on the active device). 20 new checks, 90 in total: detection of play and pause made in Spotify, handoff, pull, claim races with a late pause, an unreachable target app, a start that never becomes audible, and two different accounts. |
+| Paper | Implementation section: a *Spotify adapter* paragraph replaces "remains to be built"; it states that the adapter has not yet run against the Spotify app and that P3 is weaker for it. Line counts updated. |
+| Not verified | The model encodes assumptions about Spotify (state mirrored across devices on one account; commands act on the active device). Device logs will confirm or correct them. |

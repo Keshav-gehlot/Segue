@@ -17,6 +17,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -94,14 +95,17 @@ private fun PermissionCard(act: UiActions) {
 
 @Composable
 private fun PlaybackCard(s: EngineState, extras: UiExtras, act: UiActions) {
+    val sp = extras.spotify
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(Describe.playback(s), style = MaterialTheme.typography.titleLarge)
+            if (sp != null) Describe.nowPlaying(sp)?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
             Text(
-                (if (s.routeReady) "Earbuds: " else "Earbuds not ready: ") + extras.routeDescription +
+                (if (extras.earbudsReady) "Earbuds: " else "Earbuds not ready: ") + extras.routeDescription +
                     (if (s.playing || s.iAmOwner) " · " + Describe.position(s.positionMs) else ""),
                 style = MaterialTheme.typography.bodyMedium
             )
+            if (sp != null) SpotifyStatus(sp, act)
             s.lastResult?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
             val othersPlaying = s.peers.any { it.connected && it.status?.playing == true }
             when {
@@ -117,9 +121,39 @@ private fun PlaybackCard(s: EngineState, extras: UiExtras, act: UiActions) {
                     Button(onClick = act::pull, enabled = s.routeReady, modifier = Modifier.fillMaxWidth()) { Text("Move playback here") }
                     OutlinedButton(onClick = act::play, modifier = Modifier.fillMaxWidth()) { Text("Play here now (other phone pauses)") }
                 }
-                else -> Button(onClick = act::play) { Text("Play test track") }
+                sp == null -> Button(onClick = act::play) { Text("Play test track") }
+                sp.connected -> {
+                    Text("Play a song in Spotify on this device, or resume the last one:", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = act::play) { Text("Resume Spotify here") }
+                }
+            }
+            HorizontalDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Use Spotify", fontWeight = FontWeight.Medium)
+                    Text("Off: the built-in test track. Set it the same on every device.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = sp != null, onCheckedChange = { act.useSpotify(it) }, enabled = s.phase == "IDLE")
             }
         }
+    }
+}
+
+@Composable
+private fun SpotifyStatus(sp: SpotifyUi, act: UiActions) {
+    Text("Spotify: ${sp.status}", style = MaterialTheme.typography.bodyMedium)
+    if (sp.needsClientId) {
+        var id by remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = id,
+            onValueChange = { id = it.trim() },
+            label = { Text("Spotify Client ID") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(onClick = { act.setSpotifyClientId(id) }, enabled = Describe.looksLikeClientId(id)) { Text("Save and connect") }
+    } else if (!sp.connected) {
+        Button(onClick = act::connectSpotify) { Text("Connect Spotify") }
     }
 }
 
@@ -165,7 +199,8 @@ private fun TestingCard(ui: UiModel, s: EngineState, act: UiActions) {
                     Switch(checked = ui.testMode, onCheckedChange = { act.setTestMode(it) })
                 }
                 val peers = s.peers.filter { it.connected }
-                if (!ui.testMode) Text("Turn on Test mode to run the automated tests.", style = MaterialTheme.typography.bodySmall)
+                if (ui.extras.spotify != null) Text("The automated tests use the built-in test track. Turn off Use Spotify on both devices to run them.", style = MaterialTheme.typography.bodySmall)
+                else if (!ui.testMode) Text("Turn on Test mode to run the automated tests.", style = MaterialTheme.typography.bodySmall)
                 else if (peers.isEmpty()) Text("Connect a paired device to run the automated tests.", style = MaterialTheme.typography.bodySmall)
                 else for (p in peers) {
                     Text("Automated tests with ${p.label}", style = MaterialTheme.typography.labelLarge)

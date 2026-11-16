@@ -207,6 +207,9 @@ class Phone(val air: Air, val sched: VirtualScheduler, val name: String, var clo
     var cfg = CoordinatorConfig()
     var extraSink: EventSink? = null
     var campaignStatus = CampaignStatus()
+    /** Replaces the built-in fake player (Spotify tests). */
+    var customPlayer: com.segue.core.PlayerPort? = null
+    var routeExtra: () -> Boolean = { true }
     lateinit var engine: SegueEngine
     val id get() = engine.selfId
     /** Lives outside the engine, like in the app's service, so it survives engine restarts. */
@@ -215,7 +218,7 @@ class Phone(val air: Air, val sched: VirtualScheduler, val name: String, var clo
     fun boot(cfg: CoordinatorConfig = this.cfg, extraSink: EventSink? = this.extraSink) {
         this.cfg = cfg; this.extraSink = extraSink
         killRequested = false
-        val e = SegueEngine(identity, store, OffsetScheduler(sched, clockOffset), player, { route }, node,
+        val e = SegueEngine(identity, store, OffsetScheduler(sched, clockOffset), customPlayer ?: player, { route && routeExtra() }, node,
             EngineConfig(coordinator = cfg, label = name), wallClock = { WALL0 + sched.now }, bootId = bootId,
             sink = if (extraSink != null) TeeSink(sink, extraSink) else sink)
         e.listener = object : EngineListener {
@@ -235,6 +238,29 @@ class Phone(val air: Air, val sched: VirtualScheduler, val name: String, var clo
     }
 
     fun die() { air.kill(node) }
+}
+
+/** A phone whose player is the Spotify controller, wired as in the app's service. */
+private fun spotifyPhone(air: Air, sched: VirtualScheduler, name: String, offset: Long, account: SpotifyAccount): Pair<Phone, FakeSpotify> {
+    val p = Phone(air, sched, name, offset)
+    val app = FakeSpotify(account, sched, name)
+    val cfg = SpotifyController.coordinatorConfig(com.segue.core.Rollback.RESUME_AFTER_LEASE)
+    val ctl = SpotifyController(app, OffsetScheduler(sched, offset), SpotifyController.listenerFor { p.engine },
+        cfg.startBudgetMs - 100, cfg.pauseBudgetMs - 200) { p.sink.event(0, 0, 0, "spotify", it) }
+    app.controller = ctl
+    p.customPlayer = ctl
+    p.cfg = cfg
+    p.routeExtra = { app.connected }
+    return p to app
+}
+
+private fun overlapOf(x: FakeSpotify, y: FakeSpotify, end: Long): Long {
+    var total = 0L
+    for (i in x.intervals) for (j in y.intervals) {
+        val s = maxOf(i[0], j[0]); val e = minOf(minOf(i[1], end), minOf(j[1], end))
+        if (e > s) total += e - s
+    }
+    return total
 }
 
 private fun pair(sched: VirtualScheduler, a: Phone, b: Phone): Boolean {
@@ -665,6 +691,107 @@ fun main(args: Array<String>) {
         if (deafLower) expect("reconnect ($tag): the higher id initiated", hi.sink.lines.any { it.startsWith("radio") && it.contains("initiate=true") })
         A.engine.play(); sched.runFor(2_000); A.engine.handoffTo(B.id); sched.runFor(8_000)
         expect("reconnect ($tag): a handoff works over the new link", B.player.playing && !A.player.playing)
+    }
+
+    // ---------------------------------------------------------------- 6c. Spotify as the player, one account on both phones
+    run {
+        val sched = VirtualScheduler(); val air = Air(sched); air.startScanning()
+        val acct = SpotifyAccount(sched)
+        val (A, sa) = spotifyPhone(air, sched, "Phone A", 0, acct)
+        val (B, sb) = spotifyPhone(air, sched, "Phone B", 5_000, acct)
+        A.boot(); B.boot(); sched.runFor(100)
+        expect("spotify: pairing works", pair(sched, A, B))
+        fun tail() = "\nA:\n" + A.sink.lines.takeLast(30).joinToString("\n") + "\nB:\n" + B.sink.lines.takeLast(30).joinToString("\n")
+        fun owners() = A.engine.debugOwner() to B.engine.debugOwner()
+
+        sa.userPlay("spotify:track:one"); sched.runFor(4_000)
+        expect("spotify: a song started in the Spotify app is detected and this phone becomes the owner",
+            sa.audible && A.last?.playing == true && A.engine.debugOwner()?.first == A.id && B.engine.debugOwner() == A.engine.debugOwner(), tail())
+        expect("spotify: the other phone sees the same session but does not count it as playing here",
+            B.last?.playing == false && !sb.audible && sb.commands.isEmpty(), "B cmds=${sb.commands}")
+
+        sched.runFor(20_000)
+        var t0 = sched.now
+        A.engine.handoffTo(B.id); sched.runFor(14_000)
+        expect("spotify handoff: audio is on B only, both agree B owns, both idle",
+            sb.audible && !sa.audible && owners().first == owners().second && B.engine.debugOwner()?.first == B.id &&
+                A.engine.debugCoordinatorPhase() == Phase.IDLE && B.engine.debugCoordinatorPhase() == Phase.IDLE, tail())
+        val gap = sb.intervals.last()[0] - sa.intervals.last()[1]
+        val pausedAt = A.sink.lines.last { it.startsWith("player_cb paused") }.substringAfter("pos=").toLong()
+        expect("spotify handoff: break-before-make, and B continues from A's position",
+            gap > 0 && overlapOf(sa, sb, sched.now) == 0L && kotlin.math.abs(acct.beginPositions.last() - pausedAt) < 100, "gap=$gap paused=$pausedAt start=${acct.beginPositions.last()}")
+        println("      spotify handoff (model: 60 ms commands, 300 ms audio start): gap=$gap ms")
+        expect("spotify handoff: the source sends one pause and nothing after; the target uses Spotify's own transfer",
+            sa.commandsSince(t0) == listOf("pause") && sb.commandsSince(t0).first() == "switch" && "play" !in sb.commandsSince(t0), "A=${sa.commandsSince(t0)} B=${sb.commandsSince(t0)}")
+        expect("spotify handoff: the source does not mistake the session playing on B for playback here",
+            A.last?.playing == false && A.sink.lines.none { it.contains("Spotify started playing here") && A.sink.lines.indexOf(it) > A.sink.lines.indexOfLast { l -> l.startsWith("cmd handoff") } }, tail())
+
+        sched.runFor(10_000)
+        t0 = sched.now
+        A.engine.pullHere(); sched.runFor(14_000)
+        expect("spotify pull: playback moves back to A", sa.audible && !sb.audible && A.engine.debugOwner()?.first == A.id && owners().first == owners().second, tail())
+
+        sa.userPause(); sched.runFor(3_000)
+        expect("spotify: pausing in the Spotify app is seen as the user's pause", !sa.audible && A.last?.playing == false &&
+            A.sink.lines.any { it.contains("Spotify was paused here") })
+        sa.userResume(); sched.runFor(3_000)
+        expect("spotify: resuming in the Spotify app is seen", sa.audible && A.last?.playing == true)
+
+        t0 = sched.now
+        sb.userMoveHere(); sched.runFor(6_000)
+        expect("spotify: moving playback in Spotify's own device list is followed (B owns, A sends nothing)",
+            sb.audible && !sa.audible && B.engine.debugOwner()?.first == B.id && owners().first == owners().second && sa.commandsSince(t0).isEmpty(),
+            "A cmds=${sa.commandsSince(t0)} owners=${owners()}" + tail())
+
+        // "Play here now" on A while B plays: A's transfer and B's pause race inside Spotify.
+        for (lat in listOf(60L, 250L, 900L)) {
+            if (!sb.audible) { sb.userMoveHere(); sb.userResume(); sched.runFor(6_000) }
+            sb.pauseLatMs = lat
+            A.engine.play(); sched.runFor(9_000)
+            expect("spotify claim (B's pause takes $lat ms): A ends up playing and owning", sa.audible && !sb.audible &&
+                A.engine.debugOwner()?.first == A.id && owners().first == owners().second && A.last?.playing == true, "owners=${owners()}" + tail())
+            sched.runFor(3_000)
+        }
+        sb.pauseLatMs = 60
+
+        // the target's Spotify app is not reachable: it reports "not ready", the handoff is refused
+        sb.connected = false; B.engine.onRouteChanged(); sched.runFor(6_000)
+        A.engine.handoffTo(B.id); sched.runFor(6_000)
+        expect("spotify: a target whose Spotify app is not connected refuses; the source keeps playing", sa.audible && !sb.audible && A.engine.debugOwner()?.first == A.id, tail())
+        sb.connected = true; B.engine.onRouteChanged(); sched.runFor(6_000)
+
+        // the target's Spotify accepts commands but never starts: the start times out and the source resumes
+        sb.dead = true
+        A.engine.handoffTo(B.id); sched.runFor(20_000)
+        expect("spotify: a start that never becomes audible fails, and the source resumes", sa.audible && !sb.audible &&
+            A.engine.debugOwner()?.first == A.id && A.engine.debugCoordinatorPhase() == Phase.IDLE && B.engine.debugCoordinatorPhase() == Phase.IDLE, "owners=${owners()}" + tail())
+        sb.dead = false
+    }
+
+    // ---------------------------------------------------------------- 6d. Spotify, a different account on each phone
+    run {
+        val sched = VirtualScheduler(); val air = Air(sched); air.startScanning()
+        val (A, sa) = spotifyPhone(air, sched, "Phone A", 0, SpotifyAccount(sched))
+        val (B, sb) = spotifyPhone(air, sched, "Phone B", 5_000, SpotifyAccount(sched))
+        A.boot(); B.boot(); sched.runFor(100)
+        expect("spotify (two accounts): pairing works", pair(sched, A, B))
+        sb.account.mutate { uri = "spotify:track:old"; setPosition(42_000) }      // B's own account has another track loaded, paused
+        sa.userPlay("spotify:track:two"); sched.runFor(30_000)
+        A.engine.handoffTo(B.id); sched.runFor(14_000)
+        val pausedAt = A.sink.lines.last { it.startsWith("player_cb paused") }.substringAfter("pos=").toLong()
+        val expected = pausedAt + (sched.now - sb.intervals.last()[0])
+        expect("spotify (two accounts): the target plays the same track by URI, from the source's position",
+            sb.audible && !sa.audible && sb.account.uri == "spotify:track:two" && kotlin.math.abs(sb.account.position() - expected) < 600 &&
+                overlapOf(sa, sb, sched.now) == 0L && B.engine.debugOwner()?.first == B.id,
+            "uri=${sb.account.uri} pos=${sb.account.position()} expected=$expected\nB:\n" + B.sink.lines.takeLast(20).joinToString("\n"))
+        // B's user pauses in the Spotify app; A plays again; a later send to B must still work
+        sb.userPause(); sched.runFor(3_000)
+        sa.userResume(); sched.runFor(8_000)
+        A.engine.handoffTo(B.id); sched.runFor(14_000)
+        expect("spotify (two accounts): a phone where Spotify was paused earlier still accepts a handoff", sb.audible && !sa.audible && B.engine.debugOwner()?.first == B.id,
+            "A:\n" + A.sink.lines.takeLast(20).joinToString("\n") + "\nB:\n" + B.sink.lines.takeLast(20).joinToString("\n"))
+        A.engine.play(); sched.runFor(9_000)
+        expect("spotify (two accounts): 'play here' on A pauses B's Spotify", sa.audible && !sb.audible && overlapOf(sa, sb, sched.now) < 1_000, "overlap=${overlapOf(sa, sb, sched.now)}")
     }
 
     // ---------------------------------------------------------------- 7. codecs reject garbage
