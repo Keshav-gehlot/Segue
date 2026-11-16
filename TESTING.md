@@ -59,7 +59,7 @@ On each device, open Segue, grant *Nearby devices*, and tap **Allow background u
   - App info › Battery: allow background activity.
   - Lock Segue in Recent apps.
 
-Pair each two devices directly, in this order. Tap **Pair a phone** on both devices, check the 6-digit codes match, and confirm.
+Pair each two devices directly, in this order. On both devices open **Devices** and tap **Add**, check the 6-digit codes match, and confirm.
 
 1. X80 + iQOO 7
 2. Pad 3 + X80 (the Pad 3 joins the group)
@@ -89,7 +89,7 @@ Segue controls the Spotify app through Spotify's own SDK, which needs a Spotify 
 On each device:
 
 1. Install Spotify and log in. Play any song once, so Spotify has something loaded.
-2. In Segue, turn on **Use Spotify**, then tap **Connect Spotify**.
+2. In Segue, open **Devices** and choose **Spotify** under *Music source*. Then on **Listen**, tap **Connect Spotify**.
 3. Spotify opens its approval screen once. Tap **Agree**. Segue then shows *Spotify: Connected*.
    If it says the approval failed, check that the dashboard lists the Android package `com.segue.app`
    with the SHA1 fingerprint above.
@@ -99,7 +99,7 @@ other device tap **Move playback here**. The music should stop on the first devi
 
 Things to know:
 
-- **Use Spotify** must be set the same on every device. The automated tests in section 5 need it off.
+- Choose the same *Music source* on every device. The automated tests in section 5 need **Test track**.
 - With one Spotify account on all devices, Segue asks Spotify to move its own session, so the queue comes along.
   With different accounts, only the current track and position move.
 - Spotify takes longer to start than the test track, so expect a gap of about a second.
@@ -112,9 +112,9 @@ The app runs the test cases itself. One device, the **conductor**, drives the ru
 **peer**. The conductor arms faults on both devices over the authenticated link, triggers each
 handoff, checks the outcome, and writes every case to both devices' logs.
 
-1. On **both** devices of the pair, open the **Testing** card and turn on **Test mode**. A device with
+1. On **both** devices of the pair, open the **Lab** tab and turn on **Test mode**. A device with
    test mode off refuses every test command, so a run cannot start by accident.
-2. On the X80 (conductor), under *Automated tests with iQOO 7*, tap a preset:
+2. On the X80 (conductor), in **Lab → Automated tests → With iQOO 7**, tap a preset:
 
 | Preset | Contents | Time |
 |---|---|---|
@@ -146,12 +146,12 @@ Run order:
 | A | X80 → iQOO 7, Pad 3 bystander | Quick check, then Everything |
 | A2 | X80 → Pad 3, iQOO 7 bystander | Timing |
 | B. Audible gap | During run A's Timing part, record about 40 handoffs: one earbud against a laptop microphone in a quiet room, 48 kHz 16-bit WAV. Then `python3 scripts/measure_audio.py rec.wav`. | |
-| C. Real-world faults | By hand: turn Bluetooth off on one device mid-handoff; try a handoff after 30 min with the screen off (Doze). The manual buttons under **Diagnostics** still work for one-off faults. | |
+| C. Real-world faults | By hand: turn Bluetooth off on one device mid-handoff; try a handoff after 30 min with the screen off (Doze). The buttons under **Lab → Diagnostics** work for one-off faults. | |
 | D. Battery | Unplugged, Segue on, test track playing for 4 h. Record `adb shell dumpsys battery` before and after on both devices. Repeat with Segue stopped. | |
 
 ## 6. Export the logs and send them
 
-On **each** device, tap **Export logs** in the Testing card and save the ZIP (for example to Drive or
+On **each** device, open **Lab** and tap **Export logs** and save the ZIP (for example to Drive or
 Downloads). It is named `segue-logs-<device>-<time>.zip` and holds every log file, the device model and
 Android version, and the app version. No USB cable is needed.
 
@@ -167,7 +167,7 @@ which two devices played at once, classified as *unexpected*, *known rollback ha
 pressed play*. With `--out` it also writes `handoffs.csv`, `cases.csv` and `dual_playback.csv`.
 
 Send the ZIPs, the WAV files and your notes from steps 1 and 2 (codec, low-latency mode, Phase 0 timings,
-whether audio switching exists). I'll fill the device table and update the paper. **Delete old logs**
+whether audio switching exists). I'll fill the device table and update the paper. **Delete old** (Lab → Logs)
 clears finished log files once you've exported them.
 
 ## Notes specific to this setup

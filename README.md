@@ -35,7 +35,7 @@ TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8
 | `:core` | Self-tests pass (20 checks). Since the simulation was first reported: state export/import, `allowHandoffHere()`, and one fix found by the automated campaign (a target that crashed after stopping but before starting resumed a stale position instead of the transferred snapshot). The simulation was re-run with the fix: 24 of 120 rows moved by one or two attempts; pooled dual playback and the paper's tables are unchanged. `results/` holds the re-run. |
 | `:engine` | 90 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth, the log export, reconnection with Nearby-like discovery (one report per session, one-sided discovery), and the Spotify controller against a model of Spotify Connect (one account and two accounts). |
 | Android app (`:app`, including the Compose UI and the Nearby Connections binding) | **Builds.** GitHub Actions compiles it against the real libraries and produces a debug APK on every push (first green build: 16 Nov 2026). |
-| Automated device tests | The in-app campaign (Testing card) and log export are built and pass in simulation; see `TESTING.md`. |
+| Automated device tests | The in-app campaign (Lab tab) and log export are built and pass in simulation; see `TESTING.md`. |
 | Spotify | The adapter is built and its logic passes against a model of how Spotify behaves. **It has not yet run against the real Spotify app.** |
 | Running on devices | Installed and paired on the test devices. **No measurements yet**; `TESTING.md` is the plan. |
 | `scripts/analyze_handoffs.py` | Checked on the engine-test logs: it recovers handoff timing exactly and classifies every campaign case and overlap with 0 mismatches against ground truth. Accepts exported ZIPs. |
@@ -90,7 +90,7 @@ To rebuild the paper, run `cd paper && latexmk -pdf segue.tex`. If you add citat
 ## First run
 
 1. **Start it.** Open Segue on both phones and grant *Nearby devices*. Notifications are optional, and location is asked for only on Android 12.
-2. **Pair.** Tap **Pair a phone** on both phones. Each shows a 6-digit code; tap **They match** on both. The pairing is commit-then-reveal, so an attacker can't choose the code. Nothing is saved until both phones have confirmed and the authenticated handshake has run.
+2. **Pair.** On both phones open **Devices** and tap **Add**. Each shows a 6-digit code; tap **They match** on both. The pairing is commit-then-reveal, so an attacker can't choose the code. Nothing is saved until both phones have confirmed and the authenticated handshake has run.
 3. **Play.** Connect the earbuds to both phones (multipoint) and tap **Play test track** on phone A.
 4. **Move playback.** You have three options:
    - **Send to phone B** on phone A (push).
@@ -109,7 +109,7 @@ CI publishes them after the tests and the simulation check pass. All builds shar
 
 ## Measuring on devices (for the paper's device table)
 
-**Automated runs.** Turn on **Test mode** in the Testing card on both devices, then start a preset
+**Automated runs.** Turn on **Test mode** in the Lab tab on both devices, then start a preset
 (*Quick check*, *Timing*, *Faults*, *Everything*) from one of them. That device conducts: it arms faults on
 both sides, triggers each handoff, and logs the expected and observed outcome. Then tap **Export logs** on
 each device and analyze the ZIPs:
@@ -128,7 +128,7 @@ python3 scripts/measure_audio.py recording.wav          # needs numpy
 
 The test track has a chirp each second whose pitch encodes the second. The script reports each silent gap and the position error across it: positive means content was skipped, negative means it was repeated.
 
-**Fault runs by hand.** **Diagnostics** still offers one-off faults on the next handoff (drop READY or STATE_TRANSFER, kill the app in PROVISIONAL or TRANSFERRING).
+**Fault runs by hand.** **Lab → Diagnostics** offers one-off faults on the next handoff (drop READY or STATE_TRANSFER, kill the app in PROVISIONAL or TRANSFERRING).
 
 ## Engine design decisions beyond the paper's protocol description
 
