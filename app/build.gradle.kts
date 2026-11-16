@@ -12,8 +12,8 @@ android {
         applicationId = "com.segue.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
     }
 
     // A fixed debug key, committed on purpose: every build (local or CI) is signed alike, so a newer

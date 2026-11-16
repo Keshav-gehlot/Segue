@@ -76,3 +76,7 @@ The system is now called **Segue** (was AutoPlay); the paper title starts "Segue
 | Results | Simulation re-run with the fix. 24 of 120 rows changed by one or two attempts. Pooled dual playback (A2 2,191; A3 0) and every value in Tables V–VIII and Fig. 2 are unchanged. Neither-playing attempts across the 23 fault settings: A2 4, A3 5 (was 0 and 1). |
 | Paper | Implementation section: new core description (the "byte for byte" claim about the earlier additions was removed, since this change does alter the CSV), new line counts (core 1,052; engine 1,797; app 1,597), 61 engine checks, a *Test campaign* paragraph. Evaluation: the neither-playing sentence was updated. |
 | Repository | MIT license; CI publishes the APK as a GitHub release (`apk-latest`, and `v<version>`). |
+
+## Reconnection fix (16 Nov 2026, v0.2.1)
+
+First device report: phones paired but never connected. Cause: Nearby reports each advertiser once per discovery session, and only the lower id initiated. A peer seen while a link was up, or after a failed request, or never seen by the lower id (one-sided discovery), was never retried. Fix: discovery restarts after every drop or failure and every 15 s while a member is missing; the higher id also initiates after 8 s; a duplicate link is resolved by keeping the one the lower id initiated. The test radio now models one report per session and one-sided discovery; the old engine fails the 9 new checks (7 of them) and the fixed one passes all 70.

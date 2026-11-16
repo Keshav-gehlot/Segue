@@ -86,6 +86,12 @@ interface Transport {
     /** Advertise and discover on the separate pairing service. */
     fun startPairing(localName: String)
     fun stopPairing()
+    /**
+     * Restart discovery on the normal service so endpoints that are already advertising are
+     * reported again. Nearby reports each endpoint once per discovery session, so a peer that was
+     * found while a link was up, or whose connection request failed, is otherwise never retried.
+     */
+    fun rediscover() {}
 }
 
 fun interface EventSink {
@@ -114,6 +120,11 @@ data class EngineConfig(
     val handshakeTimeoutMs: Long = 10_000,
     val pairingTimeoutMs: Long = 180_000,
     val pingIntervalMs: Long = 5_000,
+    /** While a member is not connected, restart discovery at most this often. */
+    val rediscoverMs: Long = 15_000,
+    /** The higher id also initiates once it has seen a member for this long without a link
+     *  (the lower id may not be discovering it: discovery is often one-sided). */
+    val fallbackInitiateMs: Long = 8_000,
     val recentEvents: Int = 80
 )
 

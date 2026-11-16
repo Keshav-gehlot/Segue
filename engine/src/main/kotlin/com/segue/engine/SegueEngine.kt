@@ -81,6 +81,9 @@ class SegueEngine(
 
     /** Written by the radio thread in requestNameFor, read on the loop thread. */
     private val pendingRequest = ConcurrentHashMap<String, Int>()
+    /** Radio thread: when this phone first saw each unconnected member (for the fallback initiation). */
+    private val firstSeen = ConcurrentHashMap<Int, Long>()
+    private var lastRediscover = 0L
 
     private class Shared(val members: List<Member>, val groupKey: ByteArray?, val connected: Set<Int>, val pairName: String?)
     @Volatile private var shared = Shared(emptyList(), null, emptySet(), null)
@@ -314,8 +317,16 @@ class SegueEngine(
         }
         if (sched.nowMs() < outageUntil) return null
         val gk = s.groupKey ?: return null
-        val m = matchMember(s, foundName) ?: return null
-        if (selfId >= m.id || m.id in s.connected) return null   // lower id initiates
+        val m = matchMember(s, foundName)
+        if (m == null) { onLoop { log("radio", "found ep=$endpointId name=$foundName: not a member") }; return null }
+        if (m.id in s.connected) return null
+        // The lower id initiates. The higher id also initiates once it has seen the member for
+        // fallbackInitiateMs without a link; registerPeer keeps one link if both connect.
+        val now = sched.nowMs()
+        val seen = firstSeen.putIfAbsent(m.id, now) ?: now
+        val initiate = selfId < m.id || now - seen >= cfg.fallbackInitiateMs
+        onLoop { log("radio", "found ep=$endpointId peer=${m.id} initiate=$initiate") }
+        if (!initiate) return null
         pendingRequest[endpointId] = m.id
         return advertisedName(gk)
     }
@@ -610,7 +621,15 @@ class SegueEngine(
     }
 
     private fun registerPeer(link: PeerLink) {
-        val old = peerLinks.put(link.peerId, link)
+        val old = peerLinks[link.peerId]
+        if (old != null && old !== link && old.established) {
+            // Both phones connected at once. Keep the link the lower id initiated; both sides
+            // compute the same answer. Two links in the same direction: the older one is stale.
+            val lowerInitiated = { l: PeerLink -> l.initiator == (selfId < l.peerId) }
+            if (lowerInitiated(old) && !lowerInitiated(link)) { closeLink(link, "duplicate link"); return }
+        }
+        firstSeen.remove(link.peerId)
+        peerLinks[link.peerId] = link
         if (old != null && old !== link) closeLink(old, "replaced by newer link")
         refreshShared()
         sendApp(link, AppKind.STATUS, statusBytes())
@@ -806,11 +825,24 @@ class SegueEngine(
         pingTask = sched.schedule(cfg.pingIntervalMs) {
             onLoop {
                 for (l in peerLinks.values) ping(l)
+                maybeRediscover()
                 broadcastStatus()
                 publish()
                 schedulePing()
             }
         }
+    }
+
+    private fun maybeRediscover() {
+        if (!normalRunning || pairing != null || sched.nowMs() < outageUntil) return
+        val missing = members.filter { it.id != selfId && it.id !in peerLinks }.map { it.id }
+        if (missing.isEmpty()) { firstSeen.clear(); return }
+        if (pendingRequest.isNotEmpty() || links.values.any { !it.established && !it.pairing }) return    // a connection is in progress
+        val now = sched.nowMs()
+        if (now - lastRediscover < cfg.rediscoverMs) return
+        lastRediscover = now
+        log("radio", "rediscover missing=$missing")
+        transport.rediscover()
     }
 
     private fun ping(link: PeerLink) = sendApp(link, AppKind.PING, Codec.encodeLongs(sched.nowMs()))

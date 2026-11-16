@@ -33,7 +33,7 @@ TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8
 | Part | Status |
 |---|---|
 | `:core` | Self-tests pass (20 checks). Since the simulation was first reported: state export/import, `allowHandoffHere()`, and one fix found by the automated campaign (a target that crashed after stopping but before starting resumed a stale position instead of the transferred snapshot). The simulation was re-run with the fix: 24 of 120 rows moved by one or two attempts; pooled dual playback and the paper's tables are unchanged. `results/` holds the re-run. |
-| `:engine` | 61 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth and the log export. |
+| `:engine` | 70 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth, the log export, and reconnection with Nearby-like discovery (one report per session, one-sided discovery). |
 | Android app (`:app`, including the Compose UI and the Nearby Connections binding) | **Builds.** GitHub Actions compiles it against the real libraries and produces a debug APK on every push (first green build: 16 Nov 2026). |
 | Automated device tests | The in-app campaign (Testing card) and log export are built and pass in simulation; see `TESTING.md`. |
 | Running on devices | **Not done yet.** Nothing has run on a phone or tablet; `TESTING.md` is the plan. |

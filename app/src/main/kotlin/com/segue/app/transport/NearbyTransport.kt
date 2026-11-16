@@ -90,6 +90,8 @@ class NearbyTransport(context: Context) : Transport {
         }
     }
 
+    override fun rediscover() { main.post { restartDiscoveryNow() } }
+
     fun shutdown() {
         main.post {
             stopRadios()
@@ -137,13 +139,15 @@ class NearbyTransport(context: Context) : Transport {
      * peer again. Advertising is left alone so that incoming requests are not disturbed.
      */
     private fun restartDiscoverySoon(delayMs: Long = 1500) {
-        main.postDelayed({
-            if (mode == Mode.NORMAL) {
-                client.stopDiscovery()
-                client.startDiscovery(SERVICE_NORMAL, discovery(false), DiscoveryOptions.Builder().setStrategy(STRATEGY).build())
-                    .addOnFailureListener { e -> lastError = "discover: ${e.message}"; Log.w(TAG, "discover", e) }
-            }
-        }, delayMs)
+        main.postDelayed({ restartDiscoveryNow() }, delayMs)
+    }
+
+    private fun restartDiscoveryNow() {
+        if (mode != Mode.NORMAL) return
+        client.stopDiscovery()
+        client.startDiscovery(SERVICE_NORMAL, discovery(false), DiscoveryOptions.Builder().setStrategy(STRATEGY).build())
+            .addOnSuccessListener { lastError = null }
+            .addOnFailureListener { e -> lastError = "discover: ${e.message}"; Log.w(TAG, "discover", e) }
     }
 
     // ------------------------------------------------------------------ callbacks
@@ -163,15 +167,16 @@ class NearbyTransport(context: Context) : Transport {
                 connected[endpointId] = p.pairing
                 engine.onLinkUp(endpointId, p.incoming, p.rawToken, p.pairing)
             } else {
-                if (p?.pairing == false) restartDiscoverySoon(3000)
+                restartDiscoverySoon(3000)
                 engine.onLinkFailed(endpointId)
             }
         }
 
         override fun onDisconnected(endpointId: String) {
-            val wasPairing = connected.remove(endpointId)
+            connected.remove(endpointId)
             engine.onLinkDown(endpointId)
-            if (wasPairing == false) restartDiscoverySoon()
+            // Also after the link pairing created: it carries the peer until it drops.
+            restartDiscoverySoon()
         }
     }
 
@@ -181,6 +186,7 @@ class NearbyTransport(context: Context) : Transport {
             client.requestConnection(name, endpointId, lifecycle(pairing))
                 .addOnFailureListener { e ->
                     Log.w(TAG, "requestConnection $endpointId", e)
+                    lastError = "connect: ${e.message}"
                     engine.onLinkFailed(endpointId)
                 }
         }

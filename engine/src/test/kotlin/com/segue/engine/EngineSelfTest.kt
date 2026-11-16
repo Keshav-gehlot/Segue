@@ -98,9 +98,11 @@ class Air(private val sched: VirtualScheduler, var latencyMs: Long = 20) {
         val ep get() = "ep$idx"
         override fun transmit(endpointId: String, bytes: ByteArray) { sent.add(endpointId to bytes); deliver(this, endpointId, bytes) }
         override fun disconnect(endpointId: String) { drop(this, endpointId) }
-        override fun startNormal(localName: String) { normalName = localName }
+        override fun startNormal(localName: String) { normalName = localName; forget(this) }
+        override fun rediscover() { forget(this); rediscovers++ }
+        var rediscovers = 0
         override fun stopNormal() { normalName = null }
-        override fun startPairing(localName: String) { pairName = localName }
+        override fun startPairing(localName: String) { pairName = localName; forget(this) }
         override fun stopPairing() { pairName = null }
     }
 
@@ -111,6 +113,12 @@ class Air(private val sched: VirtualScheduler, var latencyMs: Long = 20) {
     private val blocked = HashSet<Pair<Int, Int>>()
     /** Model a relay that runs two separate Nearby connections and forwards bytes verbatim. */
     var relayMitm = false
+    /** Like Nearby: report each advertiser once per discovery session (until startNormal/rediscover). */
+    var oneShot = false
+    /** (x, y): x's discovery never sees y, as when one phone's scan misses the other's advertising. */
+    val deaf = HashSet<Pair<Int, Int>>()
+    private val reported = HashSet<Triple<Int, Int, Boolean>>()
+    private fun forget(n: Node) { reported.removeAll { it.first == n.idx } }
 
     fun node() = Node(nodes.size).also { nodes.add(it) }
     private fun byEp(ep: String) = nodes.first { it.ep == ep }
@@ -120,10 +128,20 @@ class Air(private val sched: VirtualScheduler, var latencyMs: Long = 20) {
 
     private fun scan() {
         for (x in nodes) for (y in nodes) {
-            if (x === y || conn(x, y) != null || isBlocked(x, y)) continue
+            if (x === y || isBlocked(x, y)) continue
+            if (conn(x, y) != null) {
+                // Nearby still reports an advertiser that is already connected; the session's one report is then used up.
+                if (oneShot && (x.idx to y.idx) !in deaf) {
+                    if (x.normalName != null && y.normalName != null) reported.add(Triple(x.idx, y.idx, false))
+                    if (x.pairName != null && y.pairName != null) reported.add(Triple(x.idx, y.idx, true))
+                }
+                continue
+            }
             for (pairingSvc in listOf(false, true)) {
                 val yName = (if (pairingSvc) y.pairName else y.normalName) ?: continue
                 if ((if (pairingSvc) x.pairName else x.normalName) == null) continue   // x is not discovering
+                if ((x.idx to y.idx) in deaf) continue
+                if (oneShot && !reported.add(Triple(x.idx, y.idx, pairingSvc))) continue
                 val req = x.engine.requestNameFor(y.ep, yName, pairingSvc) ?: continue
                 if (!y.engine.shouldAccept(req, pairingSvc)) { x.engine.onLinkFailed(y.ep); continue }
                 val c = Conn(x, y); conns.add(c)
@@ -620,6 +638,33 @@ fun main(args: Array<String>) {
         }
         expect("log export: ZIP holds device info and every log file intact",
             n == 2 && names == listOf("device.txt", "logs/segue-1.csv", "logs/segue-2.csv") && body.contains("3,start"))
+    }
+
+    // ---------------------------------------------------------------- 6b. reconnection with Nearby-like discovery
+    // Nearby reports each advertiser once per discovery session, and discovery is often one-sided.
+    // The earlier sections scan continuously and symmetrically, which hid both problems.
+    for (deafLower in listOf(false, true)) run {
+        val sched = VirtualScheduler(); val air = Air(sched); air.oneShot = true; air.startScanning()
+        val A = Phone(air, sched, "Phone A", 0); val B = Phone(air, sched, "Phone B", 1_000)
+        A.boot(); B.boot(); sched.runFor(100)
+        val tag = if (deafLower) "one-sided discovery" else "one report per session"
+        expect("reconnect ($tag): pairing works", pair(sched, A, B))
+        sched.runFor(20_000)
+        val (lo, hi) = if (A.id < B.id) A to B else B to A
+        if (deafLower) air.deaf.add(lo.node.idx to hi.node.idx)      // the phone that normally initiates never sees the other
+        air.partition(A.node, B.node); sched.runFor(5_000); air.heal(A.node, B.node)
+        val t0 = sched.now
+        var t = -1L
+        while (sched.now - t0 < 60_000) { sched.runFor(500); if (A.engine.debugConnected() == setOf(B.id) && B.engine.debugConnected() == setOf(A.id)) { t = sched.now - t0; break } }
+        expect("reconnect ($tag): the link comes back on its own", t >= 0,
+            "A:\n" + A.sink.lines.takeLast(15).joinToString("\n") + "\nB:\n" + B.sink.lines.takeLast(15).joinToString("\n"))
+        println("      reconnect ($tag): ${t} ms after the partition healed")
+        sched.runFor(30_000)
+        expect("reconnect ($tag): exactly one link, still up 30 s later",
+            A.engine.debugConnected() == setOf(B.id) && B.engine.debugConnected() == setOf(A.id) && air.connected(A.node, B.node))
+        if (deafLower) expect("reconnect ($tag): the higher id initiated", hi.sink.lines.any { it.startsWith("radio") && it.contains("initiate=true") })
+        A.engine.play(); sched.runFor(2_000); A.engine.handoffTo(B.id); sched.runFor(8_000)
+        expect("reconnect ($tag): a handoff works over the new link", B.player.playing && !A.player.playing)
     }
 
     // ---------------------------------------------------------------- 7. codecs reject garbage
