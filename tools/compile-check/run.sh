@@ -20,9 +20,10 @@ java -cp "$OUT/engine-test.jar" com.segue.engine.EngineSelfTestKt "$OUT/engine-t
 echo "== 2+3. app sources against the SDK jar and Nearby stubs"
 javac -d "$OUT/stubs" -cp "$ANDROID_JAR" $(find "$ROOT/tools/compile-check/stubs" -name '*.java')
 unzip -p "$ROOT"/app/libs/spotify-app-remote-release-*.aar classes.jar > "$OUT/spotify.jar"   # the real SDK classes
+unzip -p "$ROOT"/app/libs/spotify-auth-release-*.aar classes.jar > "$OUT/spotify-auth.jar"
 APP="$ROOT/app/src/main/kotlin/com/segue/app"
 kotlinc -no-reflect -jvm-target 17 \
-  -cp "$ANDROID_JAR:$OUT/stubs:$OUT/spotify.jar:$OUT/engine-test.jar" -d "$OUT/app" \
+  -cp "$ANDROID_JAR:$OUT/stubs:$OUT/spotify.jar:$OUT/spotify-auth.jar:$OUT/engine-test.jar" -d "$OUT/app" \
   "$APP/player" "$APP/route" "$APP/store" "$APP/bench" "$APP/service" "$APP/transport" "$APP/ui/UiModel.kt" \
   "$ROOT/tools/compile-check/stubs/kotlin-stubs"
 echo "app classes: $(find "$OUT/app" -name '*.class' | wc -l)"

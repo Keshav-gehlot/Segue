@@ -12,8 +12,12 @@ android {
         applicationId = "com.segue.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.1"
+        versionCode = 6
+        versionName = "0.3.2"
+        // Redirect URI of the Spotify developer app, segue://callback: the Spotify Auth library's
+        // LoginActivity receives it.
+        manifestPlaceholders["redirectSchemeName"] = "segue"
+        manifestPlaceholders["redirectHostName"] = "callback"
     }
 
     // A fixed debug key, committed on purpose: every build (local or CI) is signed alike, so a newer
@@ -52,4 +56,6 @@ dependencies {
     // Spotify App Remote SDK: distributed as a file only (see app/libs/README.md). It needs Gson at run time.
     implementation(files("libs/spotify-app-remote-release-0.8.0.aar"))
     implementation(libs.gson)
+    implementation(files("libs/spotify-auth-release-2.1.0.aar"))
+    implementation(libs.androidx.browser)
 }

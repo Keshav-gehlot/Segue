@@ -96,7 +96,7 @@ class SegueService : Service(), EngineListener {
         set(value) {
             getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_SPOTIFY_CLIENT, value.trim()).apply()
             engine.note("spotify", "client id set (${value.trim().length} chars)")
-            spotify?.connect(true)
+            spotify?.connect(false)
             engine.refresh()
         }
 
@@ -162,7 +162,7 @@ class SegueService : Service(), EngineListener {
         buildPlayer()
         lastSummary = null
         startEngine()
-        spotify?.connect(true)
+        spotify?.connect(false)
     }
 
     /** Create an engine from the stored state and start it. Main thread. */

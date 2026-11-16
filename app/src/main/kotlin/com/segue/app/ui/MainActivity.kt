@@ -17,6 +17,10 @@ import androidx.compose.runtime.setValue
 import com.segue.app.service.Background
 import com.segue.app.service.Permissions
 import com.segue.app.service.SegueService
+import com.segue.app.player.SpotifyPlayer
+import com.spotify.sdk.android.auth.AuthorizationClient
+import com.spotify.sdk.android.auth.AuthorizationRequest
+import com.spotify.sdk.android.auth.AuthorizationResponse
 import com.segue.core.MsgType
 import com.segue.core.Phase
 import com.segue.engine.Campaign
@@ -56,6 +60,34 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The user picks where the ZIP goes (Downloads, Drive, ...); no storage permission is needed. */
+    /**
+     * Spotify's approval screen, opened from this activity: the App Remote SDK's own approval view
+     * is started by the Spotify app from the background, which Android blocks, so it never appeared.
+     */
+    private val spotifyApproval = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val resp = AuthorizationClient.getResponse(r.resultCode, r.data)
+        val sp = service?.spotify ?: return@registerForActivityResult
+        when (resp.type) {
+            AuthorizationResponse.Type.TOKEN, AuthorizationResponse.Type.CODE -> sp.onApproval(true, null)
+            AuthorizationResponse.Type.ERROR -> sp.onApproval(false, resp.error)
+            else -> sp.onApproval(false, null)
+        }
+    }
+
+    private fun openSpotifyApproval() {
+        val s = service ?: return
+        val id = s.spotifyClientId
+        if (id.isBlank()) return
+        val req = AuthorizationRequest.Builder(id, AuthorizationResponse.Type.TOKEN, SpotifyPlayer.REDIRECT_URI)
+            .setScopes(arrayOf(SpotifyPlayer.SCOPE))
+            .build()
+        try {
+            spotifyApproval.launch(AuthorizationClient.createLoginActivityIntent(this, req))
+        } catch (e: ActivityNotFoundException) {
+            s.spotify?.onApproval(false, e.message)
+        }
+    }
+
     private val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val s = service
         if (uri != null && s != null) {
@@ -137,7 +169,11 @@ class MainActivity : ComponentActivity() {
             s.setPlayerMode(if (on) SegueService.MODE_SPOTIFY else SegueService.MODE_REFERENCE)
             ui = ui.copy(extras = extras())
         }
-        override fun connectSpotify() { service?.spotify?.connect(true) }
+        override fun connectSpotify() {
+            // Spotify's approval screen. If Segue is already approved it closes at once and returns
+            // the approval; then the service connects.
+            if (service?.spotify?.view()?.connected == false) openSpotifyApproval()
+        }
         override fun setSpotifyClientId(id: String) {
             service?.spotifyClientId = id
             ui = ui.copy(extras = extras())

@@ -64,6 +64,7 @@ class SpotifyPlayer(
     private var remote: SpotifyAppRemote? = null
     private var stateSub: Subscription<PlayerState>? = null
     private var connecting = false
+    private var connectAttempt = 0
     private var released = false
     private var status = "Not connected"
     @Volatile private var vConnected = false
@@ -120,12 +121,23 @@ class SpotifyPlayer(
             if (id.isEmpty()) { setStatus("Enter the Spotify Client ID"); return@onMain }
             if (!SpotifyAppRemote.isSpotifyInstalled(app)) { setStatus("Spotify is not installed on this device"); retryLater(30_000); return@onMain }
             connecting = true
+            val attempt = ++connectAttempt
             setStatus("Connecting to Spotify…")
+            // The SDK reports neither success nor failure when Spotify cannot be started (for example
+            // when the phone blocks it from starting in the background). Give up after a while.
+            main.postDelayed({
+                if (connecting && attempt == connectAttempt && remote == null) {
+                    connecting = false
+                    log("no answer from Spotify after ${CONNECT_TIMEOUT_MS} ms")
+                    setStatus("Spotify did not answer. Open the Spotify app once, then tap Connect Spotify.")
+                    retryLater(15_000)
+                }
+            }, CONNECT_TIMEOUT_MS)
             val params = ConnectionParams.Builder(id).setRedirectUri(REDIRECT_URI).showAuthView(showApproval).build()
             try {
                 SpotifyAppRemote.connect(app, params, object : Connector.ConnectionListener {
-                    override fun onConnected(r: SpotifyAppRemote) { onMain { connected(r) } }
-                    override fun onFailure(error: Throwable) { onMain { disconnected(error) } }
+                    override fun onConnected(r: SpotifyAppRemote) { onMain { if (attempt == connectAttempt) connected(r) else SpotifyAppRemote.disconnect(r) } }
+                    override fun onFailure(error: Throwable) { onMain { if (attempt == connectAttempt) disconnected(error) } }
                 })
             } catch (e: RuntimeException) {
                 disconnected(e)
@@ -171,7 +183,7 @@ class SpotifyPlayer(
         setStatus(when (error) {
             is CouldNotFindSpotifyApp -> "Spotify is not installed on this device"
             is NotLoggedInException -> "Log in to the Spotify app, then tap Connect Spotify"
-            is UserNotAuthorizedException -> "Tap Connect Spotify and allow Segue"
+            is UserNotAuthorizedException -> "Not approved yet. Tap Connect Spotify and agree in Spotify"
             is AuthenticationFailedException -> "Spotify rejected this app. Check the Client ID, package name, fingerprint and redirect URI in the Spotify dashboard, and that this Spotify account is on the app's user list."
             is OfflineModeException -> "Spotify is in offline mode"
             is UnsupportedFeatureVersionException -> "Update the Spotify app"
@@ -180,6 +192,19 @@ class SpotifyPlayer(
         controller.onConnectionChanged()
         // Approval and registration problems need the user; everything else is retried quietly.
         if (error !is UserNotAuthorizedException && error !is AuthenticationFailedException) retryLater(if (wasConnected) 3_000 else 10_000)
+    }
+
+    /** Result of Spotify's approval screen (shown by the activity with the Spotify Auth library). */
+    fun onApproval(ok: Boolean, error: String?) {
+        onMain {
+            log(if (ok) "approved in Spotify" else "approval failed: $error")
+            if (ok) { connectAttempt++; connecting = false; connect(false) }
+            else setStatus(when (error) {
+                null, "", "access_denied", "user_cancelled", "USER_CANCELLED" -> "Not approved. Tap Connect Spotify and agree in Spotify"
+                "INVALID_CLIENT", "invalid_client" -> "Spotify rejected this app's Client ID"
+                else -> "Spotify approval failed ($error). Check the Android package and fingerprint in the Spotify dashboard."
+            })
+        }
     }
 
     private fun retryLater(ms: Long) {
@@ -205,5 +230,8 @@ class SpotifyPlayer(
     companion object {
         /** Must be listed as a Redirect URI of the Spotify developer app. */
         const val REDIRECT_URI = "segue://callback"
+        /** Lets the SDK control playback; the scope the approval screen asks for. */
+        const val SCOPE = "app-remote-control"
+        private const val CONNECT_TIMEOUT_MS = 20_000L
     }
 }

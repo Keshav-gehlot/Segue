@@ -89,8 +89,10 @@ Segue controls the Spotify app through Spotify's own SDK, which needs a Spotify 
 On each device:
 
 1. Install Spotify and log in. Play any song once, so Spotify has something loaded.
-2. In Segue, turn on **Use Spotify**. Paste the Client ID and tap **Save and connect** (not needed once the ID is built into the APK).
-3. Spotify asks once whether Segue may control it. Tap **Agree**. Segue then shows *Spotify: Connected*.
+2. In Segue, turn on **Use Spotify**, then tap **Connect Spotify**.
+3. Spotify opens its approval screen once. Tap **Agree**. Segue then shows *Spotify: Connected*.
+   If it says the approval failed, check that the dashboard lists the Android package `com.segue.app`
+   with the SHA1 fingerprint above.
 
 Then play a song in Spotify on one device. Segue shows the song and *Playing on this phone*. Tap **Send to …**, or on the
 other device tap **Move playback here**. The music should stop on the first device and continue on the second from the same place.
