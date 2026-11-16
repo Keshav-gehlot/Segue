@@ -2,5 +2,5 @@
 <resources>
     <!-- Client ID of the Spotify developer app registered for package com.segue.app and this
          repository's debug key (see TESTING.md). Not a secret. Empty: the app asks for it. -->
-    <string name="spotify_client_id" translatable="false"></string>
+    <string name="spotify_client_id" translatable="false">d6e0a919a1f6417da4ba7a3b25fb7641</string>
 </resources>
