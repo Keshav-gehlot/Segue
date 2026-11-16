@@ -17,7 +17,7 @@ device measurements; [`TESTING.md`](TESTING.md) is the plan for collecting them.
 ```
 core/     protocol: HandoffCoordinator, handshake, SecureChannel, codecs (pure Kotlin)
           core/src/test: fault-injection simulator, security experiments, self-tests
-engine/   links, SAS pairing, write-ahead persistence, ownership sync, auto-run, logs (pure Kotlin)
+engine/   links, SAS pairing, write-ahead persistence, ownership sync, test campaign, log export (pure Kotlin)
 app/      Android: foreground service, Nearby Connections, audio-route check,
           AudioTrack reference player, Keystore identity, Compose UI, fault injection
 results/  outputs of the simulation and security runs reported in the paper, and figures
@@ -32,11 +32,12 @@ TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8
 
 | Part | Status |
 |---|---|
-| `:core` | Compiled and self-tests pass (20 checks). Additive change only: `exportState`/`importState` (+ `CoordinatorStateCodec`) and `allowHandoffHere()`. The full paper simulation was re-run after the change, and `handoff_sim.csv` is byte-for-byte identical. |
-| `:engine` | Compiled. 54 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). |
+| `:core` | Self-tests pass (20 checks). Since the simulation was first reported: state export/import, `allowHandoffHere()`, and one fix found by the automated campaign (a target that crashed after stopping but before starting resumed a stale position instead of the transferred snapshot). The simulation was re-run with the fix: 24 of 120 rows moved by one or two attempts; pooled dual playback and the paper's tables are unchanged. `results/` holds the re-run. |
+| `:engine` | 61 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). They include a full *Quick check* campaign run against ground truth and the log export. |
 | Android app (`:app`, including the Compose UI and the Nearby Connections binding) | **Builds.** GitHub Actions compiles it against the real libraries and produces a debug APK on every push (first green build: 16 Nov 2026). |
+| Automated device tests | The in-app campaign (Testing card) and log export are built and pass in simulation; see `TESTING.md`. |
 | Running on devices | **Not done yet.** Nothing has run on a phone or tablet; `TESTING.md` is the plan. |
-| `scripts/analyze_handoffs.py` | Checked on the engine-test logs. It recovers the ground truth exactly: gap 270 ms, request-to-audible 390 ms. |
+| `scripts/analyze_handoffs.py` | Checked on the engine-test logs: it recovers handoff timing exactly and classifies every campaign case and overlap with 0 mismatches against ground truth. Accepts exported ZIPs. |
 | `scripts/measure_audio.py` | Checked on synthetic recordings with known gaps (250–410 ms), position errors (−40 to +100 ms) and a 6 dB level change between phones. All edges were within ±2 ms. |
 
 ## Build and install
@@ -98,17 +99,25 @@ To rebuild the paper, run `cd paper && latexmk -pdf segue.tex`. If you add citat
 
 Before measuring anything, do the plan's **Phase 0** by hand. Pause on A, then play on B, and confirm that your earbuds really switch source and how long that takes. Segue coordinates the phones but cannot force the earbuds to switch.
 
+## Download the APK
+
+The newest build of `main` is always on the [Releases page](https://github.com/Keshav-gehlot/Segue/releases/tag/apk-latest)
+as `segue-<version>-debug.apk`, with its SHA-256. Each `versionName` also gets its own release (`v0.2.0`, …).
+CI publishes them after the tests and the simulation check pass. All builds share one debug signing key
+(`app/debug.keystore`, public on purpose), so updates install over each other.
+
 ## Measuring on devices (for the paper's device table)
 
-**Phone-side timing.** Each session writes a CSV log. Pull the logs from both phones:
+**Automated runs.** Turn on **Test mode** in the Testing card on both devices, then start a preset
+(*Quick check*, *Timing*, *Faults*, *Everything*) from one of them. That device conducts: it arms faults on
+both sides, triggers each handoff, and logs the expected and observed outcome. Then tap **Export logs** on
+each device and analyze the ZIPs:
 
 ```
-adb -s <phoneA> pull /sdcard/Android/data/com.segue.app/files/logs/ A/
-adb -s <phoneB> pull /sdcard/Android/data/com.segue.app/files/logs/ B/
-python3 scripts/analyze_handoffs.py A/segue-*.csv B/segue-*.csv --out handoffs.csv
+python3 scripts/analyze_handoffs.py segue-logs-a-*.zip segue-logs-b-*.zip [segue-logs-c-*.zip] --out results-dev/
 ```
 
-The engine pings its peer every 5 s and logs a clock-offset sample. The analyzer uses the sample with the lowest RTT to put both logs on one timebase; its error is at most RTT/2, and it prints that error. It reports request-to-audible time and source-pause-to-target-start gap for each handoff, with median, P95 and an overlap count.
+The engine pings its peer every 5 s and logs a clock-offset sample. The analyzer maps each event using the lowest-RTT sample within 120 s, so its error is at most RTT/2. It reports request-to-audible time and source-pause-to-target-start gap for normal handoffs, a per-case pass/fail table, and each overlap classified as unexpected, known hazard, or both users pressing play. Full steps are in `TESTING.md`.
 
 **Audible gap.** This includes the earbuds' own source switch. Record one earbud with a microphone during handoffs, for example with the earbud held against a laptop mic in a quiet room. Save a 16-bit WAV and run:
 
@@ -118,7 +127,7 @@ python3 scripts/measure_audio.py recording.wav          # needs numpy
 
 The test track has a chirp each second whose pitch encodes the second. The script reports each silent gap and the position error across it: positive means content was skipped, negative means it was repeated.
 
-**Fault runs.** Open **Diagnostics** on the target phone and pick a fault: drop READY, drop STATE_TRANSFER, or kill the app in PROVISIONAL or TRANSFERRING. Then trigger a handoff. The kill faults terminate the process right after the state is written to disk. Reopen the app to watch recovery.
+**Fault runs by hand.** **Diagnostics** still offers one-off faults on the next handoff (drop READY or STATE_TRANSFER, kill the app in PROVISIONAL or TRANSFERRING).
 
 ## Engine design decisions beyond the paper's protocol description
 
@@ -140,3 +149,7 @@ These are implementation choices the paper's implementation section should menti
 - **Restart after process death.** Android's background-start limits may stop the foreground service from coming back on its own. Reopening the app restarts it.
 - **Radios.** From late 2026, Nearby Connections no longer turns Bluetooth or Wi-Fi on by itself (Google, July 2026). The app warns when Bluetooth is off.
 - **Bluetooth contention.** Nearby may carry the phones' link over Bluetooth/BLE, which shares the radio with the earbuds' audio. Check for audio glitches during handoffs.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).

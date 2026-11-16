@@ -11,6 +11,7 @@ import com.segue.core.MsgCodec
 import com.segue.core.MsgType
 import com.segue.core.Phase
 import com.segue.core.PlayerPort
+import com.segue.core.Rollback
 import com.segue.core.Roster
 import com.segue.core.RotatingId
 import com.segue.core.SecureChannel
@@ -48,10 +49,14 @@ class SegueEngine(
     val fingerprint: String = Enrolment.fingerprint(identity.publicBytes)
     val faults = FaultPlan()
     @Volatile var listener: EngineListener? = null
+    /** While on, enrolled peers may send test commands (fault injection) to this device. Off by default. */
+    @Volatile var testMode = false
+    /** Monotonic time until which a test outage refuses every normal link. */
+    @Volatile private var outageUntil = 0L
 
     // ------------------------------------------------------------------ loop-thread state
     private var started = false
-    private var killed = false
+    @Volatile private var killed = false
     private var coordinator: HandoffCoordinator? = null
     private var members: List<Member> = emptyList()
     private var groupKey: ByteArray? = null
@@ -71,10 +76,8 @@ class SegueEngine(
     private var epochTask: Cancellable? = null
     private var pingTask: Cancellable? = null
     private var normalRunning = false
-    private var benchTask: Cancellable? = null
-    private var benchLeft = 0
-    private var benchInterval = 20_000L
-    private var benchPeer = -1
+    private val testAcks = HashMap<Long, (Boolean) -> Unit>()
+    private var testSeq = 0L
 
     /** Written by the radio thread in requestNameFor, read on the loop thread. */
     private val pendingRequest = ConcurrentHashMap<String, Int>()
@@ -131,7 +134,7 @@ class SegueEngine(
         }
         coordinator = c
         lastSaved = Codec.encodeStored(bootId, c.exportState())
-        log("start", "self=$selfId members=${members.size} fp=${fingerprint.take(12)}")
+        log("start", "self=$selfId members=${members.size} fp=${fingerprint.take(12)} playing=${platformPlayer.isPlaying()} policy=${cfg.coordinator.rollback}")
         if (restored) coord("restart") { it.onRestart() }
         refreshShared()
         startNormal()
@@ -148,6 +151,20 @@ class SegueEngine(
         timers.clear()
         started = false
         refreshShared(); publish()
+    }
+
+    /** Stop this engine for good (the host is about to replace it). Leaves the radio to the host. */
+    fun halt() {
+        sched.post {
+            killed = true
+            cancelAllTasks()
+        }
+    }
+
+    private fun cancelAllTasks() {
+        epochTask?.cancel(); pingTask?.cancel()
+        for (t in timers.values) t.second.cancel()
+        timers.clear()
     }
 
     // --- user commands
@@ -182,8 +199,10 @@ class SegueEngine(
     }
 
     /** Explicit play on this phone: claims ownership (OWNER_CLAIM); the previous owner pauses. */
-    fun play() = onLoop {
-        val c = coordinator ?: return@onLoop
+    fun play() = onLoop { doPlay() }
+
+    private fun doPlay() {
+        val c = coordinator ?: return
         val target = when {
             c.ownerId != selfId && peerLinks.containsKey(c.ownerId) -> c.ownerId
             else -> peerLinks.keys.firstOrNull() ?: -1
@@ -194,52 +213,11 @@ class SegueEngine(
         publish()
     }
 
-    fun pause() = onLoop {
+    fun pause() = onLoop { doPause() }
+
+    private fun doPause() {
         coord("cmd pause") { it.manualPause() }
         log("cmd", "pause")
-        publish()
-    }
-
-    // --- bench: automatic alternating handoffs for the device campaign
-    /**
-     * Run [count] handoffs between this device and [peerId], one every [intervalMs]: push when this
-     * device plays, pull when the peer plays. If neither of the two plays (an abort left silence, or a
-     * third device took over), playback is first restored here; that step does not count.
-     */
-    fun startBench(count: Int, intervalMs: Long, peerId: Int) = onLoop {
-        benchTask?.cancel()
-        benchLeft = count
-        benchInterval = intervalMs
-        benchPeer = peerId
-        log("bench", "start count=$count interval_ms=$intervalMs peer=$peerId")
-        scheduleBench()
-        publish()
-    }
-
-    fun stopBench() = onLoop {
-        benchTask?.cancel(); benchTask = null
-        log("bench", "stop left=$benchLeft")
-        benchLeft = 0
-        publish()
-    }
-
-    private fun scheduleBench() {
-        benchTask = sched.schedule(benchInterval) { onLoop { benchStep() } }
-    }
-
-    private fun benchStep() {
-        if (benchLeft <= 0) { log("bench", "done"); benchTask = null; publish(); return }
-        val c = coordinator ?: return
-        val peer = benchPeer
-        val peerSt = peerStatus[peer]
-        when {
-            !peerLinks.containsKey(peer) -> log("bench", "wait: peer $peer not connected")
-            c.phase != Phase.IDLE -> log("bench", "wait: busy in ${c.phase}")
-            c.believesOwner && platformPlayer.isPlaying() -> { benchLeft--; log("bench", "push to=$peer left=$benchLeft"); doHandoff(peer) }
-            peerSt != null && peerSt.ownerId == peer && peerSt.playing -> { benchLeft--; log("bench", "pull from=$peer left=$benchLeft"); doPull() }
-            else -> { log("bench", "restore: neither device plays, playing here"); coord("bench restore") { it.manualClaim(peer) } }
-        }
-        scheduleBench()
         publish()
     }
 
@@ -321,8 +299,9 @@ class SegueEngine(
     /** Accept an incoming connection request from [remoteName]? */
     fun shouldAccept(remoteName: String, pairingService: Boolean): Boolean {
         val s = shared
-        return if (pairingService) s.pairName != null && remoteName.startsWith(Names.PAIR_PREFIX) && remoteName != s.pairName
-        else matchMember(s, remoteName)?.let { it.id !in s.connected } ?: false
+        if (pairingService) return s.pairName != null && remoteName.startsWith(Names.PAIR_PREFIX) && remoteName != s.pairName
+        if (sched.nowMs() < outageUntil) return false
+        return matchMember(s, remoteName)?.let { it.id !in s.connected } ?: false
     }
 
     /** A discovered endpoint. Returns the local name to request a connection with, or null to ignore it. */
@@ -333,6 +312,7 @@ class SegueEngine(
             if (!foundName.startsWith(Names.PAIR_PREFIX) || foundName == mine) return null
             return if (mine < foundName) mine else null   // exactly one side initiates
         }
+        if (sched.nowMs() < outageUntil) return null
         val gk = s.groupKey ?: return null
         val m = matchMember(s, foundName) ?: return null
         if (selfId >= m.id || m.id in s.connected) return null   // lower id initiates
@@ -429,7 +409,7 @@ class SegueEngine(
         }
         override fun cancelTimer(name: String) { timers.remove(name)?.second?.cancel() }
         override fun player(): PlayerPort = bufferedPlayer
-        override fun routeReady(): Boolean = this@SegueEngine.routeReady()
+        override fun routeReady(): Boolean = routeOk()
         override fun randomId(): Long {
             var v: Long
             do { v = Crypto.rng.nextLong() } while (v == 0L)
@@ -453,6 +433,22 @@ class SegueEngine(
             outbox.clear(); playerEffects.clear()
             listener?.onKillRequested()
             return
+        }
+        val crash = faults.crashInPhase
+        if (crash != null && c.phase == crash) {
+            val restartMs = faults.crashRestartMs
+            faults.crashInPhase = null
+            log("fault", "crash after persisting $crash restart_ms=$restartMs player_playing=${platformPlayer.isPlaying()}")
+            killed = true
+            outbox.clear(); playerEffects.clear()
+            cancelAllTasks()
+            listener?.onCrashRequested(restartMs)
+            return
+        }
+        val outage = faults.outageInPhase
+        if (outage != null && c.phase == outage) {
+            faults.outageInPhase = null
+            startOutage(faults.outageMs)          // before the flush: this phase's messages are lost in flight
         }
         flushEffects()
         if (ownerChanged || c.phase != phase0) broadcastStatus()
@@ -484,8 +480,10 @@ class SegueEngine(
             else -> m.reason
         }
         val delay = faults.extraDelayMs
-        val sealed = seal(link, AppKind.COORD, MsgCodec.encode(m)) ?: return
-        if (delay > 0) sched.schedule(delay) { transport.transmit(link.endpointId, sealed) } else transport.transmit(link.endpointId, sealed)
+        repeat(if (faults.duplicate) 2 else 1) {
+            val sealed = seal(link, AppKind.COORD, MsgCodec.encode(m)) ?: return
+            if (delay > 0) sched.schedule(delay) { transport.transmit(link.endpointId, sealed) } else transport.transmit(link.endpointId, sealed)
+        }
     }
 
     private fun onCoordMsg(link: PeerLink, body: ByteArray) {
@@ -508,8 +506,10 @@ class SegueEngine(
         val c = coordinator
         return Codec.encodeStatus(PeerStatus(
             ownerId = c?.ownerId ?: NO_OWNER, ownerEpoch = c?.ownerEpoch ?: 0, playing = platformPlayer.isPlaying(),
-            routeReady = routeReady(), positionMs = platformPlayer.snapshot().positionMs, phase = c?.phase?.name ?: "IDLE"))
+            routeReady = routeOk(), positionMs = platformPlayer.snapshot().positionMs, phase = c?.phase?.name ?: "IDLE"))
     }
+
+    private fun routeOk(): Boolean = !faults.forceNoRoute && routeReady()
 
     private fun broadcastStatus() {
         if (peerLinks.isEmpty()) return
@@ -634,6 +634,8 @@ class SegueEngine(
             AppKind.STATUS -> onStatus(link.peerId, body)
             AppKind.PING -> Codec.decodeLongs(body, 1)?.let { sendApp(link, AppKind.PONG, Codec.encodeLongs(it[0], sched.nowMs())) }
             AppKind.PONG -> Codec.decodeLongs(body, 2)?.let { onPong(link.peerId, it[0], it[1]) }
+            AppKind.TEST -> Codec.decodeTest(body)?.let { (id, spec) -> onTest(link, id, spec) }
+            AppKind.TEST_ACK -> Codec.decodeLongs(body, 2)?.let { testAcks.remove(it[0])?.invoke(it[1] == 1L) }
             else -> log("frame_drop", "unknown app kind $kind")
         }
     }
@@ -850,11 +852,101 @@ class SegueEngine(
                 PeerView(m.id, m.label, Enrolment.fingerprint(m.publicKey).take(12), peerLinks.containsKey(m.id),
                     peerStatus[m.id], ck?.offsetMs, ck?.rttMs)
             },
-            pairing = pairingView, lastResult = lastResult, recent = recent.toList(), benchLeft = benchLeft
+            pairing = pairingView, lastResult = lastResult, recent = recent.toList(), policy = cfg.coordinator.rollback.name
         ))
     }
 
     private inline fun onLoop(crossinline block: () -> Unit) = sched.post { if (!killed) block() }
+
+    // ================================================================== test commands (fault injection)
+    //
+    // A command is a short text spec, applied locally or sent to a peer over the authenticated link:
+    //   clear | drop:<MsgType>:<n> | delay:<ms> | dup:<0|1> | noroute:<0|1>
+    //   on:<Phase>:kill | on:<Phase>:crash:<restartMs> | on:<Phase>:outage:<ms> | outage:<ms>
+    //   play | pause | allow | status | policy:<Rollback> | after:<ms>:<spec>
+    // A peer obeys only while its own test mode is on.
+
+    private fun startOutage(ms: Long) {
+        log("fault", "outage ms=$ms")
+        outageUntil = sched.nowMs() + ms
+        for (l in links.values.toList()) if (!l.pairing || l.finalized) closeLink(l, "test outage")
+        refreshShared()
+        sched.schedule(ms + 50) { onLoop { log("fault", "outage over"); restartNormal() } }
+        publish()
+    }
+
+    private fun applyTest(spec: String, from: String): Boolean {
+        val p = spec.split(":")
+        val ok = try {
+            when (p[0]) {
+                "clear" -> faults.clear()
+                "drop" -> faults.dropNext(MsgType.valueOf(p[1]), p[2].toInt())
+                "delay" -> faults.extraDelayMs = p[1].toLong()
+                "dup" -> faults.duplicate = p[1] == "1"
+                "noroute" -> { faults.forceNoRoute = p[1] == "1"; broadcastStatus() }
+                "on" -> {
+                    val phase = Phase.valueOf(p[1])
+                    when (p[2]) {
+                        "kill" -> faults.killInPhase = phase
+                        "crash" -> { faults.crashRestartMs = p[3].toLong(); faults.crashInPhase = phase }
+                        "outage" -> { faults.outageMs = p[3].toLong(); faults.outageInPhase = phase }
+                        else -> throw IllegalArgumentException(spec)
+                    }
+                }
+                "outage" -> startOutage(p[1].toLong())
+                "play" -> doPlay()
+                "pause" -> doPause()
+                "allow" -> coord("test allow") { it.allowHandoffHere() }
+                "status" -> broadcastStatus()
+                // Delayed so that the ack for this command leaves before the host restarts the engine.
+                "policy" -> { val r = Rollback.valueOf(p[1]); sched.schedule(400) { listener?.onPolicyRequested(r) } }
+                "after" -> {
+                    val rest = p.drop(2).joinToString(":")
+                    require(rest.isNotEmpty())
+                    sched.schedule(p[1].toLong()) { onLoop { applyTest(rest, from) } }
+                }
+                else -> throw IllegalArgumentException(spec)
+            }
+            true
+        } catch (e: RuntimeException) { false }
+        log("test_cmd", "$spec from=$from ok=$ok")
+        return ok
+    }
+
+    private fun onTest(link: PeerLink, id: Long, spec: String) {
+        val ok = if (testMode) applyTest(spec, "peer${link.peerId}") else { log("test_refused", "$spec from=${link.peerId} (test mode is off)"); false }
+        if (link.established) sendApp(link, AppKind.TEST_ACK, Codec.encodeLongs(id, if (ok) 1L else 0L))
+    }
+
+    /** What the campaign runner sees. Call on the engine's scheduler thread only. */
+    internal class Probe(
+        val alive: Boolean, val selfPlaying: Boolean, val phase: Phase, val ownerId: Int, val ownerEpoch: Long,
+        val connected: Boolean, val peer: PeerStatus?
+    )
+
+    internal fun probe(peerId: Int): Probe {
+        val c = coordinator
+        return Probe(alive = !killed && started && c != null, selfPlaying = platformPlayer.isPlaying(),
+            phase = c?.phase ?: Phase.IDLE, ownerId = c?.ownerId ?: NO_OWNER, ownerEpoch = c?.ownerEpoch ?: 0,
+            connected = peerLinks.containsKey(peerId), peer = peerStatus[peerId])
+    }
+
+    internal fun testLocal(spec: String): Boolean = if (killed) false else applyTest(spec, "local")
+
+    /** Send a test command to [peerId]; [onAck] gets the peer's answer (never called if the link drops first). */
+    internal fun testRemote(peerId: Int, spec: String, onAck: (Boolean) -> Unit) {
+        val link = peerLinks[peerId]
+        if (killed || link == null) { sched.post { onAck(false) }; return }
+        val id = ++testSeq
+        testAcks[id] = onAck
+        sendApp(link, AppKind.TEST, Codec.encodeTest(id, spec))
+    }
+
+    internal fun testHandoff(peerId: Int) { if (!killed) doHandoff(peerId) }
+    internal fun testPull() { if (!killed) doPull() }
+    internal fun testLog(kind: String, detail: String) = log(kind, detail)
+    internal fun labelFor(peerId: Int): String = labelOf(peerId)
+    internal val policy: Rollback get() = cfg.coordinator.rollback
 
     // ------------------------------------------------------------------ test hooks (same module only)
     internal fun debugCoordinatorPhase(): Phase? = coordinator?.phase

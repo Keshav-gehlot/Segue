@@ -64,6 +64,8 @@ class HandoffCoordinator(
     private var stopThen = StopThen.NONE
     private var stopAfterStart = StopThen.NONE
     private var autoSuspended = false
+    /** Target side: the player was confirmed playing the transferred state in this transaction. */
+    private var tgtStarted = false
     private var claimsLeft = 0
     private var claimPeer = -1
     private val dead = LinkedHashSet<Long>()
@@ -93,7 +95,16 @@ class HandoffCoordinator(
         phase = Phase.IDLE
         tx = 0; snap = null; abortDecided = false; abortWhilePausing = false
         stopThen = StopThen.NONE; stopAfterStart = StopThen.NONE
+        tgtStarted = false
     }
+
+    /**
+     * What a target that stopped uncommitted plays when the commit arrives after all: its own paused
+     * position if it had started (that is where the content stopped), otherwise the transferred
+     * snapshot. Without this, a target that crashed before starting would resume whatever its player
+     * last held. Read it before finish() clears the transaction.
+     */
+    private fun resumePoint(): Snapshot? = if (tgtStarted) null else snap
 
     private fun commitAsSource() {
         ownerEpoch = txEpoch; ownerId = peer
@@ -256,6 +267,7 @@ class HandoffCoordinator(
         tx = m.txId; txEpoch = m.epoch; peer = m.sender
         anchor = env.now()
         nonce = env.randomId()
+        tgtStarted = false
         phase = Phase.READY_SENT
         win = if (m.windowMs in (cfg.startBudgetMs + 1)..cfg.windowMs) m.windowMs else cfg.windowMs
         send(MsgType.READY, peer, tx, txEpoch, nonce = nonce)
@@ -301,7 +313,7 @@ class HandoffCoordinator(
                 ownerEpoch = txEpoch; ownerId = env.self
                 stopThen = StopThen.RESUME_COMMITTED
             }
-            Phase.UNCERTAIN -> { commitAsTarget(); env.player().requestPlay(null) }
+            Phase.UNCERTAIN -> { val from = resumePoint(); commitAsTarget(); env.player().requestPlay(from) }
             else -> {}
         }
     }
@@ -398,7 +410,7 @@ class HandoffCoordinator(
                     env.setTimer(T_RTX, cfg.retransmitMs)
                 }
                 StopThen.REPLY_ABORTED -> targetAbort()
-                StopThen.RESUME_COMMITTED -> { finish(markDead = false); env.player().requestPlay(null) }
+                StopThen.RESUME_COMMITTED -> { val from = resumePoint(); finish(markDead = false); env.player().requestPlay(from) }
                 StopThen.NONE -> {}
             }
             else -> {}
@@ -410,10 +422,12 @@ class HandoffCoordinator(
             Phase.TGT_STARTING -> when {
                 !ok -> targetAbort()
                 stopAfterStart != StopThen.NONE -> {
+                    tgtStarted = true
                     phase = Phase.TGT_STOPPING; stopThen = stopAfterStart; stopAfterStart = StopThen.NONE
                     env.player().requestPause()
                 }
                 else -> {
+                    tgtStarted = true
                     phase = Phase.PROVISIONAL
                     send(MsgType.TARGET_PLAYING, peer, tx, txEpoch)
                     env.setTimer(T_RTX, cfg.retransmitMs)
@@ -448,6 +462,8 @@ class HandoffCoordinator(
             Phase.READY_SENT -> targetAbort()
             Phase.TGT_STARTING, Phase.PROVISIONAL, Phase.TGT_STOPPING -> {
                 // Uncommitted provisional playback must not survive a restart.
+                // A start issued before the crash may have completed while we were down.
+                if (phase == Phase.TGT_STARTING && env.player().isPlaying()) tgtStarted = true
                 phase = Phase.TGT_STOPPING; stopThen = StopThen.GO_UNCERTAIN; stopAfterStart = StopThen.NONE
                 env.player().requestPause()
             }
@@ -464,7 +480,7 @@ class HandoffCoordinator(
         ownerEpoch = ownerEpoch, ownerId = ownerId, phase = phase, staleRejected = staleRejected,
         epochFloor = epochFloor, tx = tx, txEpoch = txEpoch, peer = peer, anchor = anchor, win = win,
         nonce = nonce, snap = snap, abortDecided = abortDecided, abortWhilePausing = abortWhilePausing,
-        stopThen = stopThen.name, stopAfterStart = stopAfterStart.name, autoSuspended = autoSuspended,
+        stopThen = stopThen.name, stopAfterStart = stopAfterStart.name, autoSuspended = autoSuspended, tgtStarted = tgtStarted,
         claimsLeft = claimsLeft, claimPeer = claimPeer, dead = dead.toList(),
         committed = committed.entries.map { it.key to it.value }
     )
@@ -475,7 +491,7 @@ class HandoffCoordinator(
         epochFloor = s.epochFloor; tx = s.tx; txEpoch = s.txEpoch; peer = s.peer; anchor = s.anchor; win = s.win
         nonce = s.nonce; snap = s.snap; abortDecided = s.abortDecided; abortWhilePausing = s.abortWhilePausing
         stopThen = StopThen.valueOf(s.stopThen); stopAfterStart = StopThen.valueOf(s.stopAfterStart)
-        autoSuspended = s.autoSuspended; claimsLeft = s.claimsLeft; claimPeer = s.claimPeer
+        autoSuspended = s.autoSuspended; tgtStarted = s.tgtStarted; claimsLeft = s.claimsLeft; claimPeer = s.claimPeer
         dead.clear(); dead.addAll(s.dead)
         committed.clear(); for ((k, v) in s.committed) committed[k] = v
     }

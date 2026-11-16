@@ -34,14 +34,20 @@ The buds support three devices at once, so keep all three connected throughout.
 
 **Stop and tell me** if the buds don't move to the device that starts playing after the other one has paused. Segue coordinates the devices but cannot force the earbuds to switch.
 
-## 3. Build, install, pair (about 30 min)
+## 3. Install, pair (about 30 min)
+
+Download the APK from the repository's **Releases** page: the release named *Segue … (latest build)*
+always holds the newest build of `main`, as `segue-<version>-debug.apk`. Open it on each device and
+allow installing from that source, or install over USB:
 
 ```
-./gradlew :core:selfTest :engine:selfTest :app:assembleDebug
-adb -s <X80-serial>  install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s <iQOO7-serial> install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s <Pad3-serial> install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <X80-serial>   install -r segue-0.2.0-debug.apk
+adb -s <iQOO7-serial> install -r segue-0.2.0-debug.apk
+adb -s <Pad3-serial>  install -r segue-0.2.0-debug.apk
 ```
+
+Every build is signed with the same debug key, so a newer APK installs over an older one and keeps
+the pairing. To build it yourself instead: `./gradlew :app:assembleDebug`.
 
 On each device, open Segue, grant *Nearby devices*, and tap **Allow background use**. Then apply that brand's extra settings. Menu names vary by OS version; the app lists the steps too.
 
@@ -68,27 +74,69 @@ Every device should then list the other two as connected.
 3. Listen: there is one chirp per second, and its pitch rises step by step through each 10-second cycle. A handoff should leave a short silence but never repeat or skip a pitch.
 4. All three devices should show *Earbuds: ready*, and the Pad 3 should show where it is playing.
 
-## 5. Measurement campaign
+## 5. Automated test runs
 
-| Run | How | Feeds |
+The app runs the test cases itself. One device, the **conductor**, drives the run; the other is the
+**peer**. The conductor arms faults on both devices over the authenticated link, triggers each
+handoff, checks the outcome, and writes every case to both devices' logs.
+
+1. On **both** devices of the pair, open the **Testing** card and turn on **Test mode**. A device with
+   test mode off refuses every test command, so a run cannot start by accident.
+2. On the X80 (conductor), under *Automated tests with iQOO 7*, tap a preset:
+
+| Preset | Contents | Time |
 |---|---|---|
-| **A. Logged handoffs, primary** | X80 › Diagnostics › *With iQOO 7* › **Run 400**: one handoff every 20 s, alternating direction, about 2 h 15 min. Devices about 1 m apart, screens on. The Pad 3 stays on and connected; it must never play (third-device check). | Request-to-audio, gap, player latencies, handshake |
-| **A2. Logged handoffs, secondary** | Same, *With OnePlus Pad 3* › **Run 400**, with the iQOO 7 as the bystander. | Phone-to-tablet table |
-| **B. Audible gap** | During run A, record about 40 handoffs: one earbud held against a laptop microphone in a quiet room, Audacity, 48 kHz 16-bit WAV. Then `python3 scripts/measure_audio.py rec.wav`. | Audible gap, position error |
-| **C. Faults** (primary pair) | Before a handoff, pick a fault in Diagnostics on the device that will be the **target** (Drop READY, Kill: provisional) or the **source** (Drop STATE, Kill: transferring). After a kill, reopen the app. Also turn Bluetooth off on one device mid-handoff, and try a handoff after 30 min with the screen off (Doze). Aim for 30 runs of each, at least 150 in total. | Fault rows, dual-playback count |
-| **D. Battery** | Unplugged, Segue on, test track playing for 4 h. Record `adb shell dumpsys battery` (charge counter) before and after on both devices. Repeat with Segue stopped. | Battery row |
+| **Quick check** | 4 normal handoffs and one round of fault cases. Run this first. | about 25 min |
+| **Timing** | 400 normal handoffs, alternating direction, every 20 s or so | about 75 min |
+| **Faults** | Three rounds of every fault case | about 60 min |
+| **Everything** | Timing then Faults | about 2 h 15 min |
 
-## 6. Collect and send
+3. Keep both devices about 1 m apart, screens on, earbuds connected to both. The third device stays on
+   and connected as a bystander and must never play. The card shows progress and a pass/fail count.
+   **Stop the run** ends it at any point.
+4. Turn **Test mode** off on both devices afterwards.
+
+What a fault round covers, first under the rollback policy, then again under safe-pause:
+
+- **Lost and delayed messages:** PREPARE, READY, STATE_TRANSFER, TARGET_PLAYING and COMMIT dropped once,
+  several times or always; 300 ms delay; every message duplicated.
+- **Rejections:** the target reports no audio route; the user paused manually.
+- **Link outages:** during the transfer and during the provisional window.
+- **Crashes:** the coordinator killed on the source while preparing or transferring, and on the target
+  while starting or in the provisional window (short and long restarts). The player keeps running,
+  as when Android kills the app's process.
+- **Claims:** a manual claim, two devices pressing play at the same moment, and a claim while partitioned.
+
+Run order:
+
+| Run | Pair (conductor first) | Preset |
+|---|---|---|
+| A | X80 → iQOO 7, Pad 3 bystander | Quick check, then Everything |
+| A2 | X80 → Pad 3, iQOO 7 bystander | Timing |
+| B. Audible gap | During run A's Timing part, record about 40 handoffs: one earbud against a laptop microphone in a quiet room, 48 kHz 16-bit WAV. Then `python3 scripts/measure_audio.py rec.wav`. | |
+| C. Real-world faults | By hand: turn Bluetooth off on one device mid-handoff; try a handoff after 30 min with the screen off (Doze). The manual buttons under **Diagnostics** still work for one-off faults. | |
+| D. Battery | Unplugged, Segue on, test track playing for 4 h. Record `adb shell dumpsys battery` before and after on both devices. Repeat with Segue stopped. | |
+
+## 6. Export the logs and send them
+
+On **each** device, tap **Export logs** in the Testing card and save the ZIP (for example to Drive or
+Downloads). It is named `segue-logs-<device>-<time>.zip` and holds every log file, the device model and
+Android version, and the app version. No USB cable is needed.
+
+Then analyze two or three ZIPs together:
 
 ```
-adb -s <X80-serial>   pull /sdcard/Android/data/com.segue.app/files/logs/ x80/
-adb -s <iQOO7-serial> pull /sdcard/Android/data/com.segue.app/files/logs/ iqoo7/
-adb -s <Pad3-serial>  pull /sdcard/Android/data/com.segue.app/files/logs/ pad3/
-python3 scripts/analyze_handoffs.py x80/segue-*.csv iqoo7/segue-*.csv --out primary.csv
-python3 scripts/analyze_handoffs.py x80/segue-*.csv pad3/segue-*.csv  --out secondary.csv
+python3 scripts/analyze_handoffs.py segue-logs-x80-*.zip segue-logs-iqoo-7-*.zip segue-logs-pad-3-*.zip --out primary/
+python3 scripts/analyze_handoffs.py segue-logs-x80-*.zip segue-logs-pad-3-*.zip --out secondary/
 ```
 
-Send the three log folders, the WAV files, both CSVs, and your notes from steps 1 and 2: codec, low-latency mode, Phase 0 timings, and whether audio switching exists. I'll fill Table X and update the paper.
+It prints handoff timing (normal cases only), a pass/fail table of every test case, and every interval in
+which two devices played at once, classified as *unexpected*, *known rollback hazard* or *both users
+pressed play*. With `--out` it also writes `handoffs.csv`, `cases.csv` and `dual_playback.csv`.
+
+Send the ZIPs, the WAV files and your notes from steps 1 and 2 (codec, low-latency mode, Phase 0 timings,
+whether audio switching exists). I'll fill the device table and update the paper. **Delete old logs**
+clears finished log files once you've exported them.
 
 ## Notes specific to this setup
 

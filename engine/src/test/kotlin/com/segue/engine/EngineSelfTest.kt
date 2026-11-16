@@ -73,7 +73,12 @@ class FakePlayer(private val sched: VirtualScheduler, var pauseLatMs: Long = 80,
 class ListSink : EventSink {
     val kinds = ArrayList<String>()
     val lines = ArrayList<String>()
-    override fun event(monoMs: Long, wallMs: Long, device: Int, kind: String, detail: String) { kinds.add(kind); lines.add("$kind $detail") }
+    /** True (shared) time of each line, for ground-truth windows. */
+    val stamps = ArrayList<Long>()
+    var clock: () -> Long = { 0L }
+    override fun event(monoMs: Long, wallMs: Long, device: Int, kind: String, detail: String) {
+        kinds.add(kind); lines.add("$kind $detail"); stamps.add(clock())
+    }
     fun count(kind: String) = kinds.count { it == kind }
 }
 
@@ -175,15 +180,22 @@ class Phone(val air: Air, val sched: VirtualScheduler, val name: String, var clo
             val store: EngineStore = MemoryStore(), val identity: Identity = Identity.generate()) {
     val node = air.node()
     val player = FakePlayer(sched)
-    val sink = ListSink()
+    val sink = ListSink().also { it.clock = { sched.now } }
     var route = true
     var bootId = "boot-1"
     var last: EngineState? = null
     var killRequested = false
+    var testMode = false
+    var cfg = CoordinatorConfig()
+    var extraSink: EventSink? = null
+    var campaignStatus = CampaignStatus()
     lateinit var engine: SegueEngine
     val id get() = engine.selfId
+    /** Lives outside the engine, like in the app's service, so it survives engine restarts. */
+    val campaign = Campaign(sched, { engine }) { campaignStatus = it }
 
-    fun boot(cfg: CoordinatorConfig = CoordinatorConfig(), extraSink: EventSink? = null) {
+    fun boot(cfg: CoordinatorConfig = this.cfg, extraSink: EventSink? = this.extraSink) {
+        this.cfg = cfg; this.extraSink = extraSink
         killRequested = false
         val e = SegueEngine(identity, store, OffsetScheduler(sched, clockOffset), player, { route }, node,
             EngineConfig(coordinator = cfg, label = name), wallClock = { WALL0 + sched.now }, bootId = bootId,
@@ -191,7 +203,15 @@ class Phone(val air: Air, val sched: VirtualScheduler, val name: String, var clo
         e.listener = object : EngineListener {
             override fun onState(state: EngineState) { last = state }
             override fun onKillRequested() { killRequested = true }
+            // Coordinator crash with the player surviving: links drop, a new engine starts from the store.
+            override fun onCrashRequested(restartAfterMs: Long) { die(); sched.schedule(restartAfterMs) { boot() } }
+            override fun onPolicyRequested(rollback: com.segue.core.Rollback) {
+                if (rollback == this@Phone.cfg.rollback) return
+                engine.halt(); die()
+                sched.post { boot(this@Phone.cfg.copy(rollback = rollback)) }
+            }
         }
+        e.testMode = testMode
         engine = e; node.engine = e; player.engine = e
         e.start()
     }
@@ -381,13 +401,6 @@ fun main(args: Array<String>) {
         A.engine.handoffTo(C.id); sched.runFor(8000)
         expect("3 phones: handoff A->C; B also learns C owns", C.player.playing && !A.player.playing && !B.player.playing &&
             B.engine.debugOwner()?.first == C.id)
-        val bIntervals = B.player.intervals.size
-        A.engine.startBench(6, 15_000, C.id); sched.runFor(8 * 15_000L)
-        val aPush = A.sink.lines.count { it.startsWith("bench push") }; val aPull = A.sink.lines.count { it.startsWith("bench pull") }
-        expect("3 phones: auto-run between A and C only; B never plays and tracks the owner",
-            aPush == 3 && aPull == 3 && B.player.intervals.size == bIntervals && A.last?.benchLeft == 0 &&
-                B.engine.debugOwner() == A.engine.debugOwner() && overlapMs(A.player, C.player, sched.now) == 0L,
-            "push=$aPush pull=$aPull bPlays=${B.player.intervals.size - bIntervals} owners=${A.engine.debugOwner()}/${B.engine.debugOwner()}")
     }
 
     // ---------------------------------------------------------------- 4. crash during the provisional window, restart from disk
@@ -517,21 +530,96 @@ fun main(args: Array<String>) {
             "src=${owner2.player.playing} tgt=${other.player.playing} overlap=${overlapSince(A.player, B.player, tStart, sched.now)}")
     }
 
-    // ---------------------------------------------------------------- bench loop
+    // ---------------------------------------------------------------- automated campaign (all test cases)
     run {
         val sched = VirtualScheduler(); val air = Air(sched); air.startScanning()
-        val A = Phone(air, sched, "A", 0); val B = Phone(air, sched, "B", 5)
-        A.boot(); B.boot(); sched.runFor(100)
-        check(pair(sched, A, B))
-        A.engine.startBench(8, 15_000, B.id)            // nothing playing yet: the loop restores playback first
-        sched.runFor(16 * 15_000L)
-        val txRe = Regex("tx=([0-9a-f]+)")
-        val commits = (A.sink.lines + B.sink.lines).filter { it.startsWith("msg_out OWNER_COMMITTED") }
-            .mapNotNull { txRe.find(it)?.groupValues?.get(1) }.toSet().size
-        val pushes = A.sink.lines.count { it.startsWith("bench push") }; val pulls = A.sink.lines.count { it.startsWith("bench pull") }
-        expect("bench loop: 8 automatic handoffs, alternating push and pull, all committed, no overlap",
-            commits == 8 && pushes == 4 && pulls == 4 && A.last?.benchLeft == 0 && overlapMs(A.player, B.player, sched.now) == 0L,
-            "commits=$commits pushes=$pushes pulls=$pulls left=${A.last?.benchLeft}")
+        val csvA = FileWriter(File(outDir, "campaignA.csv")); val csvB = FileWriter(File(outDir, "campaignB.csv"))
+        val A = Phone(air, sched, "A", 0); val B = Phone(air, sched, "B", 3_333_333); val C = Phone(air, sched, "C", 99)
+        A.testMode = true; B.testMode = true
+        A.boot(extraSink = CsvEventSink(csvA)); B.boot(extraSink = CsvEventSink(csvB)); C.boot(); sched.runFor(100)
+        check(pair(sched, A, B)); check(pair(sched, C, A)); check(pair(sched, C, B))
+        sched.runFor(3000)
+
+        // Test mode off on the peer: commands are refused and the campaign stops with a clear message.
+        B.engine.testMode = false
+        A.campaign.start(Campaign.Preset.QUICK, B.id); sched.runFor(6000)
+        expect("campaign: refuses to run while the peer's test mode is off",
+            !A.campaignStatus.running && A.campaignStatus.lastLine.contains("Test mode") && B.sink.lines.any { it.startsWith("test_refused") })
+        B.engine.testMode = true
+
+        val cBefore = C.player.intervals.size
+        A.campaign.start(Campaign.Preset.QUICK, B.id)
+        var guard = 0
+        do { sched.runFor(5000); guard++ } while (A.campaignStatus.running && guard < 2000)
+        val st = A.campaignStatus
+        csvA.flush(); csvB.flush()
+
+        // Ground truth per case: overlap of the two fake players inside the case's window.
+        class Row(val name: String, val dir: String, val policy: String, val expectDual: String, val begin: Long) { var end = Long.MAX_VALUE; var verdict = "?" }
+        val rows = ArrayList<Row>()
+        fun field(line: String, key: String) = Regex("$key=(\\S+)").find(line)?.groupValues?.get(1) ?: ""
+        for ((i, line) in A.sink.lines.withIndex()) {
+            if (line.startsWith("case_begin")) {
+                rows.lastOrNull()?.let { if (it.end == Long.MAX_VALUE) it.end = A.sink.stamps[i] }
+                rows.add(Row(field(line, "name"), field(line, "dir"), field(line, "policy"), field(line, "expect_dual"), A.sink.stamps[i]))
+            } else if (line.startsWith("case_end")) rows.lastOrNull()?.verdict = field(line, "verdict")
+        }
+        rows.lastOrNull()?.let { if (it.end == Long.MAX_VALUE) it.end = sched.now }
+        fun overlapIn(r: Row): Long {
+            var total = 0L
+            for (i in A.player.intervals) for (j in B.player.intervals) {
+                val s0 = maxOf(r.begin, maxOf(i[0], j[0])); val e0 = minOf(r.end, minOf(minOf(i[1], sched.now), minOf(j[1], sched.now)))
+                if (e0 > s0) total += e0 - s0
+            }
+            return total
+        }
+        val truth = StringBuilder("name,dir,policy,expect_dual,verdict,overlap_ms\n")
+        println("      case                              dir   policy              verdict  overlap_ms")
+        for (r in rows) {
+            val ov = overlapIn(r)
+            truth.append("${r.name},${r.dir},${r.policy},${r.expectDual},${r.verdict},$ov\n")
+            println("      %-33s %-5s %-19s %-8s %d%s".format(r.name, r.dir, r.policy, r.verdict, ov, if (r.expectDual != "no") "  (expected: ${r.expectDual})" else ""))
+        }
+        File(outDir, "campaign_truth.csv").writeText(truth.toString())
+
+        expect("campaign: quick preset ran every case (${st.total} steps) and finished", !st.running && st.lastLine == "Finished" && rows.size >= 55,
+            "running=${st.running} last=${st.lastLine} rows=${rows.size}")
+        expect("campaign: every case got the expected outcome", st.failed == 0 && st.inconclusive == 0 && rows.all { it.verdict == "pass" },
+            "passed=${st.passed} failed=${st.failed} inconclusive=${st.inconclusive}: " + rows.filter { it.verdict != "pass" }.joinToString { "${it.name}/${it.dir}/${it.policy}=${it.verdict}" })
+        val unexpected = rows.filter { it.expectDual == "no" && overlapIn(it) > 0 }
+        expect("campaign: no overlap of the two players in any case that forbids it", unexpected.isEmpty(),
+            unexpected.joinToString { "${it.name}/${it.dir}/${it.policy}=${overlapIn(it)}ms" })
+        val hazard = rows.filter { it.expectDual == "hazard" }
+        expect("campaign: orphaned-player hazard appears under rollback (both directions) and never under safe-pause",
+            hazard.size == 2 && hazard.all { overlapIn(it) > 1000 } &&
+                rows.filter { it.name == "crash_target_provisional_long" && it.policy == "SAFE_PAUSE" }.let { sp -> sp.size == 2 && sp.all { overlapIn(it) == 0L } },
+            hazard.joinToString { "${it.dir}=${overlapIn(it)}" })
+        expect("campaign: both devices end on the default rollback policy, faults cleared",
+            A.last?.policy == "RESUME_AFTER_LEASE" && B.last?.policy == "RESUME_AFTER_LEASE" && !A.engine.faults.duplicate && !B.engine.faults.forceNoRoute)
+        expect("campaign: the third device never played", C.player.intervals.size == cBefore)
+        println("      campaign: ${rows.size} cases in ${(rows.last().end - rows.first().begin) / 60000} min of simulated time")
+
+        // Stop mid-run
+        A.campaign.start(Campaign.Preset.TIMING, B.id); sched.runFor(40_000)
+        val mid = A.campaignStatus
+        A.campaign.stop(); sched.runFor(2000)
+        expect("campaign: can be stopped mid-run", mid.running && mid.index >= 2 && !A.campaignStatus.running)
+        csvA.close(); csvB.close()
+    }
+
+    // ---------------------------------------------------------------- log export
+    run {
+        val dir = Files.createTempDirectory("sglogs").toFile()
+        File(dir, "segue-1.csv").writeText("t_mono_ms,t_wall_ms,device,kind,detail\n1,2,3,start,\"x\"\n")
+        File(dir, "segue-2.csv").writeText("t_mono_ms,t_wall_ms,device,kind,detail\n")
+        val bo = java.io.ByteArrayOutputStream()
+        val n = LogExport.zip(bo, dir.listFiles()!!.toList(), mapOf("device.txt" to "model=test"))
+        val names = ArrayList<String>(); var body = ""
+        java.util.zip.ZipInputStream(bo.toByteArray().inputStream()).use { z ->
+            while (true) { val e = z.nextEntry ?: break; names.add(e.name); if (e.name == "logs/segue-1.csv") body = z.readBytes().decodeToString() }
+        }
+        expect("log export: ZIP holds device info and every log file intact",
+            n == 2 && names == listOf("device.txt", "logs/segue-1.csv", "logs/segue-2.csv") && body.contains("3,start"))
     }
 
     // ---------------------------------------------------------------- 7. codecs reject garbage

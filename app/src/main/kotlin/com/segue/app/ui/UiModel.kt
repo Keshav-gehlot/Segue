@@ -1,5 +1,7 @@
 package com.segue.app.ui
 
+import com.segue.engine.Campaign
+import com.segue.engine.CampaignStatus
 import com.segue.engine.EngineState
 
 data class UiExtras(
@@ -16,7 +18,12 @@ data class UiModel(
     val backgroundUnrestricted: Boolean = true,
     val backgroundTips: List<String> = emptyList(),
     val serviceRunning: Boolean = false,
-    val extras: UiExtras = UiExtras()
+    val extras: UiExtras = UiExtras(),
+    val testMode: Boolean = false,
+    val campaign: CampaignStatus = CampaignStatus(),
+    val logFiles: Int = 0,
+    /** One-line result of the last export or clean-up. */
+    val notice: String? = null
 )
 
 enum class FaultKind { DROP_READY, DROP_STATE_TRANSFER, KILL_IN_PROVISIONAL, KILL_IN_TRANSFERRING, CLEAR }
@@ -34,8 +41,11 @@ interface UiActions {
     fun dismissPairing()
     fun unpair(peerId: Int)
     fun fault(kind: FaultKind)
-    fun startBench(count: Int, peerId: Int)
-    fun stopBench()
+    fun setTestMode(on: Boolean)
+    fun startCampaign(preset: Campaign.Preset, peerId: Int)
+    fun stopCampaign()
+    fun exportLogs()
+    fun clearOldLogs()
     fun stopService()
     fun startService()
 }
@@ -68,6 +78,23 @@ object Describe {
         val rtt = p.rttMs?.let { " · ${it} ms" } ?: ""
         return "Connected · $play · $route$rtt"
     }
+
+    fun campaign(c: CampaignStatus): String = when {
+        c.total == 0 -> ""
+        c.running -> "${c.preset}: step ${c.index + 1} of ${c.total} · ${c.current}\n${c.passed} passed · ${c.failed} failed · ${c.inconclusive} inconclusive"
+        else -> "${c.preset}: ${c.lastLine}\n${c.passed} passed · ${c.failed} failed · ${c.inconclusive} inconclusive"
+    }
+
+    /** Rough duration, shown on the buttons. */
+    fun presetHint(p: Campaign.Preset): String = when (p) {
+        Campaign.Preset.QUICK -> "about 25 min"
+        Campaign.Preset.TIMING -> "400 handoffs, about 75 min"
+        Campaign.Preset.FAULTS -> "about 60 min"
+        Campaign.Preset.FULL -> "about 2 h 15 min"
+    }
+
+    fun exportName(label: String, stamp: String): String =
+        "segue-logs-" + label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "device" } + "-" + stamp + ".zip"
 
     fun canSendTo(s: EngineState, p: com.segue.engine.PeerView): Boolean =
         s.playing && s.iAmOwner && s.phase == "IDLE" && p.connected && p.status?.routeReady == true

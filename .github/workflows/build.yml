@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -52,3 +52,24 @@ jobs:
           name: segue-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish the APK as a GitHub release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          SHORT=$(git rev-parse --short HEAD)
+          cp app/build/outputs/apk/debug/app-debug.apk "segue-${VERSION}-debug.apk"
+          sha256sum "segue-${VERSION}-debug.apk" > "segue-${VERSION}-debug.apk.sha256"
+          NOTES="Debug build of ${GITHUB_SHA} (${SHORT}), built and tested by CI run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Install on all test devices; every build is signed with the same committed debug key, so it upgrades in place."
+          # Rolling "latest" release: always the newest build of main.
+          gh release delete apk-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create apk-latest --target "$GITHUB_SHA" --title "Segue ${VERSION} (latest build, ${SHORT})" \
+            --notes "$NOTES" --latest "segue-${VERSION}-debug.apk" "segue-${VERSION}-debug.apk.sha256"
+          # Versioned release, created once per versionName.
+          if ! gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release create "v${VERSION}" --target "$GITHUB_SHA" --title "Segue ${VERSION}" --notes "$NOTES" --latest=false \
+              "segue-${VERSION}-debug.apk" "segue-${VERSION}-debug.apk.sha256"
+          fi

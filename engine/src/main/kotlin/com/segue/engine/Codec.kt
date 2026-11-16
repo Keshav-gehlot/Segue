@@ -36,6 +36,9 @@ internal object AppKind {
     const val STATUS = 4
     const val PING = 5
     const val PONG = 6
+    /** Test command for the peer (honoured only while its test mode is on). */
+    const val TEST = 7
+    const val TEST_ACK = 8
 }
 
 internal class GroupMsg(val key: ByteArray, val memberCount: Int, val label: String)
@@ -95,6 +98,15 @@ internal object Codec {
 
     fun decodeStatus(b: ByteArray): PeerStatus? = parse(b) { i ->
         PeerStatus(i.readInt(), i.readLong(), i.readBoolean(), i.readBoolean(), i.readLong(), i.readUTF())
+    }
+
+    fun encodeTest(id: Long, spec: String): ByteArray = build { o -> o.writeLong(id); o.writeUTF(spec) }
+
+    fun decodeTest(b: ByteArray): Pair<Long, String>? = parse(b) { i ->
+        val id = i.readLong()
+        val spec = i.readUTF()
+        require(spec.length <= 200)
+        id to spec
     }
 
     fun encodeLongs(vararg v: Long): ByteArray = build { o -> for (x in v) o.writeLong(x) }

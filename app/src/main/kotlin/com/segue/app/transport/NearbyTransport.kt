@@ -97,6 +97,20 @@ class NearbyTransport(context: Context) : Transport {
         }
     }
 
+    /**
+     * Drop every connection and stop advertising and discovery, as a process death would. Used when
+     * the engine is replaced (emulated coordinator crash, rollback-policy switch); the new engine
+     * starts the radios again.
+     */
+    fun dropAll() {
+        main.post {
+            stopRadios()
+            client.stopAllEndpoints()
+            connected.clear(); pending.clear()
+            normalName = null; pairName = null
+        }
+    }
+
     // ------------------------------------------------------------------ radios
 
     private fun startMode(m: Mode) {
@@ -118,9 +132,18 @@ class NearbyTransport(context: Context) : Transport {
         mode = Mode.OFF
     }
 
-    /** Discovery reports an endpoint once; restart it after a drop so the peer is found again. */
-    private fun restartDiscoverySoon() {
-        main.postDelayed({ if (mode == Mode.NORMAL) startMode(Mode.NORMAL) }, 1500)
+    /**
+     * Discovery reports an endpoint once, so restart it after a drop or a refused request to find the
+     * peer again. Advertising is left alone so that incoming requests are not disturbed.
+     */
+    private fun restartDiscoverySoon(delayMs: Long = 1500) {
+        main.postDelayed({
+            if (mode == Mode.NORMAL) {
+                client.stopDiscovery()
+                client.startDiscovery(SERVICE_NORMAL, discovery(false), DiscoveryOptions.Builder().setStrategy(STRATEGY).build())
+                    .addOnFailureListener { e -> lastError = "discover: ${e.message}"; Log.w(TAG, "discover", e) }
+            }
+        }, delayMs)
     }
 
     // ------------------------------------------------------------------ callbacks
@@ -140,6 +163,7 @@ class NearbyTransport(context: Context) : Transport {
                 connected[endpointId] = p.pairing
                 engine.onLinkUp(endpointId, p.incoming, p.rawToken, p.pairing)
             } else {
+                if (p?.pairing == false) restartDiscoverySoon(3000)
                 engine.onLinkFailed(endpointId)
             }
         }

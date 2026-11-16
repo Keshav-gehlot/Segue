@@ -28,6 +28,7 @@ data class CoordinatorState(
     val stopThen: String,
     val stopAfterStart: String,
     val autoSuspended: Boolean,
+    val tgtStarted: Boolean,
     val claimsLeft: Int,
     val claimPeer: Int,
     val dead: List<Long>,
@@ -36,7 +37,7 @@ data class CoordinatorState(
 
 /** Versioned binary codec. decode() returns null on any malformed or unknown input. */
 object CoordinatorStateCodec {
-    private const val VERSION = 1
+    private const val VERSION = 2
 
     fun encode(s: CoordinatorState): ByteArray {
         val bo = ByteArrayOutputStream()
@@ -49,7 +50,7 @@ object CoordinatorStateCodec {
             s.snap?.let { o.writeUTF(it.provider); o.writeUTF(it.contentId); o.writeLong(it.positionMs); o.writeBoolean(it.confirmed) }
             o.writeBoolean(s.abortDecided); o.writeBoolean(s.abortWhilePausing)
             o.writeUTF(s.stopThen); o.writeUTF(s.stopAfterStart)
-            o.writeBoolean(s.autoSuspended); o.writeInt(s.claimsLeft); o.writeInt(s.claimPeer)
+            o.writeBoolean(s.autoSuspended); o.writeBoolean(s.tgtStarted); o.writeInt(s.claimsLeft); o.writeInt(s.claimPeer)
             o.writeInt(s.dead.size); for (d in s.dead) o.writeLong(d)
             o.writeInt(s.committed.size); for ((k, v) in s.committed) { o.writeLong(k); o.writeLong(v) }
         }
@@ -65,14 +66,14 @@ object CoordinatorStateCodec {
             val snap = if (i.readBoolean()) Snapshot(i.readUTF(), i.readUTF(), i.readLong(), i.readBoolean()) else null
             val abortDecided = i.readBoolean(); val abortWhilePausing = i.readBoolean()
             val stopThen = i.readUTF(); val stopAfterStart = i.readUTF()
-            val autoSuspended = i.readBoolean(); val claimsLeft = i.readInt(); val claimPeer = i.readInt()
+            val autoSuspended = i.readBoolean(); val tgtStarted = i.readBoolean(); val claimsLeft = i.readInt(); val claimPeer = i.readInt()
             val nDead = i.readInt(); require(nDead in 0..100_000)
             val dead = List(nDead) { i.readLong() }
             val nCommitted = i.readInt(); require(nCommitted in 0..100_000)
             val committed = List(nCommitted) { i.readLong() to i.readLong() }
             require(i.read() == -1)
             CoordinatorState(ownerEpoch, ownerId, phase, stale, floor, tx, txEpoch, peer, anchor, win, nonce, snap,
-                abortDecided, abortWhilePausing, stopThen, stopAfterStart, autoSuspended, claimsLeft, claimPeer,
+                abortDecided, abortWhilePausing, stopThen, stopAfterStart, autoSuspended, tgtStarted, claimsLeft, claimPeer,
                 dead, committed)
         }
     } catch (e: Exception) { null }

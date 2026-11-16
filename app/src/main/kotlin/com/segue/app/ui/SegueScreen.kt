@@ -18,6 +18,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.segue.engine.Campaign
 import com.segue.engine.EngineState
 import com.segue.engine.PairingView
 
@@ -70,6 +72,7 @@ fun SegueScreen(ui: UiModel, act: UiActions) {
                     ui.extras.transportError?.let { InfoCard("Nearby Connections", it) }
                     PlaybackCard(s, ui.extras, act)
                     PhonesCard(s, act)
+                    TestingCard(ui, s, act)
                     DiagnosticsCard(s, ui.extras, act)
                     TextButton(onClick = act::stopService) { Text("Stop Segue") }
                     PairingDialog(s.pairing, act)
@@ -141,6 +144,52 @@ private fun PhonesCard(s: EngineState, act: UiActions) {
 }
 
 @Composable
+private fun TestingCard(ui: UiModel, s: EngineState, act: UiActions) {
+    var open by remember { mutableStateOf(false) }
+    val c = ui.campaign
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Testing", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { open = !open }) { Text(if (open || c.running) "Hide" else "Show") }
+            }
+            if (c.total > 0) Text(Describe.campaign(c), style = MaterialTheme.typography.bodyMedium)
+            if (c.running) OutlinedButton(onClick = act::stopCampaign) { Text("Stop the run") }
+            if (open && !c.running) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Test mode", fontWeight = FontWeight.Medium)
+                        Text("Lets your paired devices inject faults here. Turn it on on both devices for a run, and off afterwards.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = ui.testMode, onCheckedChange = { act.setTestMode(it) })
+                }
+                val peers = s.peers.filter { it.connected }
+                if (!ui.testMode) Text("Turn on Test mode to run the automated tests.", style = MaterialTheme.typography.bodySmall)
+                else if (peers.isEmpty()) Text("Connect a paired device to run the automated tests.", style = MaterialTheme.typography.bodySmall)
+                else for (p in peers) {
+                    Text("Automated tests with ${p.label}", style = MaterialTheme.typography.labelLarge)
+                    for (preset in Campaign.Preset.entries) {
+                        OutlinedButton(onClick = { act.startCampaign(preset, p.id) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("${preset.label} (${Describe.presetHint(preset)})")
+                        }
+                    }
+                }
+            }
+            if (open) {
+                HorizontalDivider()
+                Text("Logs: ${ui.logFiles} file(s) on this device", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = act::exportLogs) { Text("Export logs") }
+                    OutlinedButton(onClick = act::clearOldLogs, enabled = !c.running) { Text("Delete old logs") }
+                }
+                ui.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DiagnosticsCard(s: EngineState, extras: UiExtras, act: UiActions) {
     var open by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
@@ -151,30 +200,16 @@ private fun DiagnosticsCard(s: EngineState, extras: UiExtras, act: UiActions) {
             }
             if (open) {
                 Text("phase ${s.phase} · owner ${s.ownerId} · epoch ${s.ownerEpoch} · id ${s.selfId}", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text("rollback policy ${s.policy}", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 extras.logPath?.let { Text("Log: $it", fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
-                Text("Automatic handoffs (one every 20 s, alternating direction)", style = MaterialTheme.typography.labelLarge)
-                if (s.benchLeft > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${s.benchLeft} left", modifier = Modifier.weight(1f))
-                        OutlinedButton(onClick = act::stopBench) { Text("Stop") }
-                    }
-                } else {
-                    for (p in s.peers.filter { it.connected }) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("With ${p.label}", modifier = Modifier.weight(1f))
-                            OutlinedButton(onClick = { act.startBench(20, p.id) }) { Text("Run 20") }
-                            OutlinedButton(onClick = { act.startBench(400, p.id) }) { Text("Run 400") }
-                        }
-                    }
-                }
-                Text("Fault injection (next handoff)", style = MaterialTheme.typography.labelLarge)
+                Text("Manual fault injection (next handoff)", style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { act.fault(FaultKind.DROP_READY) }) { Text("Drop READY") }
                     OutlinedButton(onClick = { act.fault(FaultKind.DROP_STATE_TRANSFER) }) { Text("Drop STATE") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { act.fault(FaultKind.KILL_IN_PROVISIONAL) }) { Text("Kill: provisional") }
-                    OutlinedButton(onClick = { act.fault(FaultKind.KILL_IN_TRANSFERRING) }) { Text("Kill: transferring") }
+                    OutlinedButton(onClick = { act.fault(FaultKind.KILL_IN_PROVISIONAL) }) { Text("Kill app: provisional") }
+                    OutlinedButton(onClick = { act.fault(FaultKind.KILL_IN_TRANSFERRING) }) { Text("Kill app: transferring") }
                 }
                 TextButton(onClick = { act.fault(FaultKind.CLEAR) }) { Text("Clear faults") }
                 HorizontalDivider()

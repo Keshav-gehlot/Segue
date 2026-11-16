@@ -2,6 +2,7 @@ package com.segue.app.service
 
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
@@ -18,14 +19,20 @@ import com.segue.app.route.RouteMonitor
 import com.segue.app.store.BootId
 import com.segue.app.store.KeystoreIdentity
 import com.segue.app.transport.NearbyTransport
-import com.segue.engine.SegueEngine
+import com.segue.core.Identity
+import com.segue.core.Rollback
+import com.segue.engine.Campaign
+import com.segue.engine.CampaignStatus
 import com.segue.engine.EngineConfig
 import com.segue.engine.EngineListener
 import com.segue.engine.EngineState
 import com.segue.engine.EventSink
 import com.segue.engine.ExecutorScheduler
 import com.segue.engine.FileStore
+import com.segue.engine.LogExport
+import com.segue.engine.SegueEngine
 import java.io.File
+import java.io.OutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -33,6 +40,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  * task is keeping this phone's link to the other enrolled phones and the earbuds' playback in sync.
  * On Android 14+ the type's prerequisite is met by CHANGE_WIFI_STATE (normal permission) and the
  * granted BLUETOOTH_* runtime permissions.
+ *
+ * The engine object can be replaced while the service runs: tests emulate a coordinator crash (the
+ * engine stops, the player keeps playing, a new engine starts from the stored state) and switch the
+ * rollback policy. The player, the radio layer, the scheduler and the campaign runner outlive it.
  */
 class SegueService : Service(), EngineListener {
 
@@ -45,21 +56,35 @@ class SegueService : Service(), EngineListener {
     private val uiListeners = CopyOnWriteArrayList<(EngineState) -> Unit>()
     private lateinit var scheduler: ExecutorScheduler
     private lateinit var player: ReferencePlayer
+    private lateinit var identity: Identity
+    private lateinit var config: EngineConfig
     lateinit var route: RouteMonitor; private set
     lateinit var transport: NearbyTransport; private set
-    lateinit var engine: SegueEngine; private set
+    @Volatile lateinit var engine: SegueEngine; private set
+    lateinit var campaign: Campaign; private set
     private var media: MediaControls? = null
     var eventLog: EventLogFile? = null; private set
     @Volatile var lastState: EngineState? = null; private set
+    @Volatile var campaignStatus = CampaignStatus(); private set
+    @Volatile var onCampaign: ((CampaignStatus) -> Unit)? = null
     private var lastSummary: String? = null
     var foregroundError: String? = null; private set
+
+    var testMode: Boolean
+        get() = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_TEST_MODE, false)
+        set(value) {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_TEST_MODE, value).apply()
+            engine.testMode = value
+            engine.note("test_mode", "on=$value")
+        }
 
     override fun onCreate() {
         super.onCreate()
         Notifications.createChannel(this)
         scheduler = ExecutorScheduler("segue-engine", { SystemClock.elapsedRealtime() }) { Log.e(TAG, "engine error", it) }
         eventLog = EventLogFile.open(this)
-        val config = EngineConfig(label = Background.deviceLabel(this).take(40))
+        config = EngineConfig(label = Background.deviceLabel(this).take(40))
+        identity = KeystoreIdentity.loadOrCreate()
         player = ReferencePlayer(this, object : ReferencePlayer.Listener {
             override fun onPaused() = engine.onPlayerPaused()
             override fun onStarted(ok: Boolean) = engine.onPlayerStarted(ok)
@@ -67,8 +92,19 @@ class SegueService : Service(), EngineListener {
         }, startTimeoutMs = config.coordinator.startBudgetMs - 50)
         route = RouteMonitor(this) { engine.onRouteChanged() }
         transport = NearbyTransport(this)
-        engine = SegueEngine(
-            identity = KeystoreIdentity.loadOrCreate(),
+        campaign = Campaign(scheduler, { engine }) { st ->
+            campaignStatus = st
+            main.post { onCampaign?.invoke(st) }
+        }
+        startEngine()
+        media = MediaControls(this, onPlay = { engine.play() }, onPause = { engine.pause() })
+        route.start()
+    }
+
+    /** Create an engine from the stored state and start it. Main thread. */
+    private fun startEngine() {
+        val e = SegueEngine(
+            identity = identity,
             store = FileStore(File(filesDir, "engine")),
             sched = scheduler,
             platformPlayer = player,
@@ -78,12 +114,12 @@ class SegueService : Service(), EngineListener {
             bootId = BootId.read(this),
             sink = eventLog ?: EventSink.NONE
         )
-        transport.engine = engine
-        engine.listener = this
-        media = MediaControls(this, onPlay = { engine.play() }, onPause = { engine.pause() })
-        route.start()
-        engine.start()
-        engine.note("device", Background.describeDevice(this))
+        e.testMode = testMode
+        e.listener = this
+        engine = e
+        transport.engine = e
+        e.start()
+        e.note("device", Background.describeDevice(this))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -109,6 +145,7 @@ class SegueService : Service(), EngineListener {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        campaign.stop()
         engine.stop()
         route.stop()
         player.release()
@@ -118,7 +155,8 @@ class SegueService : Service(), EngineListener {
         super.onDestroy()
     }
 
-    // EngineListener: called on the engine thread.
+    // ------------------------------------------------------------------ EngineListener (engine thread)
+
     override fun onState(state: EngineState) {
         lastState = state
         main.post {
@@ -139,6 +177,28 @@ class SegueService : Service(), EngineListener {
         Process.killProcess(Process.myPid())
     }
 
+    /** Emulated coordinator crash: the engine has stopped itself; the player is left alone. */
+    override fun onCrashRequested(restartAfterMs: Long) {
+        Log.w(TAG, "fault injection: coordinator down for $restartAfterMs ms")
+        main.post {
+            transport.dropAll()
+            main.postDelayed({ startEngine() }, restartAfterMs)
+        }
+    }
+
+    override fun onPolicyRequested(rollback: Rollback) {
+        main.post {
+            if (config.coordinator.rollback == rollback) return@post
+            Log.i(TAG, "switching rollback policy to $rollback")
+            engine.halt()
+            transport.dropAll()
+            config = config.copy(coordinator = config.coordinator.copy(rollback = rollback))
+            startEngine()
+        }
+    }
+
+    // ------------------------------------------------------------------ for the UI (main thread)
+
     fun addListener(l: (EngineState) -> Unit) {
         uiListeners.add(l)
         lastState?.let { s -> main.post { l(s) } }
@@ -147,8 +207,42 @@ class SegueService : Service(), EngineListener {
 
     fun removeListener(l: (EngineState) -> Unit) { uiListeners.remove(l) }
 
+    /** All log files of this device, oldest first; the last one is the session being written. */
+    fun logFiles(): List<File> =
+        EventLogFile.dir(this).listFiles { f -> f.isFile && f.name.endsWith(".csv") }?.sortedBy { it.name } ?: emptyList()
+
+    /** Write every log and a device description as one ZIP. Call from a background thread. */
+    fun exportLogs(out: OutputStream): Int {
+        val s = lastState
+        val info = buildString {
+            append("app=Segue\n")
+            append(Background.describeDevice(this@SegueService)).append('\n')
+            append("label=").append(config.label).append('\n')
+            if (s != null) {
+                append("device_id=").append(s.selfId).append('\n')
+                append("fingerprint=").append(s.fingerprint).append('\n')
+                append("policy=").append(s.policy).append('\n')
+                for (p in s.peers) append("peer=").append(p.id).append(" label=").append(p.label).append(" connected=").append(p.connected).append('\n')
+            }
+            append("test_mode=").append(testMode).append('\n')
+            append("exported_wall_ms=").append(System.currentTimeMillis()).append('\n')
+        }
+        return LogExport.zip(out, logFiles(), mapOf("device.txt" to info))
+    }
+
+    /** Delete logs of earlier sessions; the current session's file is kept. */
+    fun clearOldLogs(): Int {
+        val current = eventLog?.file
+        var n = 0
+        for (f in logFiles()) if (f != current && f.delete()) n++
+        engine.note("logs", "cleared $n old files")
+        return n
+    }
+
     companion object {
         const val ACTION_STOP = "com.segue.app.STOP"
         private const val TAG = "SegueService"
+        private const val PREFS = "segue"
+        private const val KEY_TEST_MODE = "test_mode"
     }
 }

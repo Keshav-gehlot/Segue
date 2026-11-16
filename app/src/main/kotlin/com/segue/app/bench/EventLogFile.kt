@@ -25,8 +25,10 @@ class EventLogFile private constructor(val file: File, private val writer: Buffe
     fun close() = try { writer.close() } catch (e: IOException) { }
 
     companion object {
+        fun dir(context: Context): File = context.getExternalFilesDir("logs") ?: File(context.filesDir, "logs")
+
         fun open(context: Context): EventLogFile? = try {
-            val dir = context.getExternalFilesDir("logs") ?: File(context.filesDir, "logs")
+            val dir = dir(context)
             dir.mkdirs()
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
             val f = File(dir, "segue-$stamp.csv")

@@ -66,3 +66,13 @@ The system is now called **Segue** (was AutoPlay); the paper title starts "Segue
 | Code | Packages `com.autoplay.*` became `com.segue.*`, and the app ID is `com.segue.app`. |
 | Protocol | Domain-separation labels `AP2-*` became `SG2-*`. The paper's equations and the code agree. |
 | Results | Two label strings in `security.csv` were renamed. No numbers changed: the full handoff simulation was re-run after the rename and its CSV is byte-identical. |
+
+## Automated test campaign and a core fix (16 Nov 2026)
+
+| Area | Change |
+|---|---|
+| Engine and app | In-app automated test campaign (test mode, presets Quick check / Timing / Faults / Everything) driven over the authenticated link, plus one-tap log export as a ZIP per device. The analyzer reads the ZIPs and classifies every overlap. |
+| Core fix | Found by the campaign: a target that crashed after stopping, before its player started, resumed the player's stale position when it later committed. It now resumes from the transferred snapshot (`tgtStarted`, state codec version 2). |
+| Results | Simulation re-run with the fix. 24 of 120 rows changed by one or two attempts. Pooled dual playback (A2 2,191; A3 0) and every value in Tables V–VIII and Fig. 2 are unchanged. Neither-playing attempts across the 23 fault settings: A2 4, A3 5 (was 0 and 1). |
+| Paper | Implementation section: new core description (the "byte for byte" claim about the earlier additions was removed, since this change does alter the CSV), new line counts (core 1,052; engine 1,797; app 1,597), 61 engine checks, a *Test campaign* paragraph. Evaluation: the neither-playing sentence was updated. |
+| Repository | MIT license; CI publishes the APK as a GitHub release (`apk-latest`, and `v<version>`). |

@@ -3,6 +3,7 @@ package com.segue.engine
 import com.segue.core.CoordinatorConfig
 import com.segue.core.MsgType
 import com.segue.core.Phase
+import com.segue.core.Rollback
 import java.io.Writer
 
 /** An enrolled phone: its identity key is pinned at pairing and never changes. */
@@ -56,16 +57,23 @@ data class EngineState(
     val pairing: PairingView,
     val lastResult: String?,
     val recent: List<String>,
-    /** Automatic handoffs still to run (0 = not running). */
-    val benchLeft: Int = 0
+    /** Rollback policy of this device's coordinator. */
+    val policy: String = "RESUME_AFTER_LEASE"
 ) {
     val iAmOwner: Boolean get() = ownerId == selfId
 }
 
 interface EngineListener {
     fun onState(state: EngineState)
-    /** Fault injection asked the app to die now (bench builds only). */
+    /** Fault injection asked the app to kill its process now. */
     fun onKillRequested() {}
+    /**
+     * Fault injection stopped this engine to emulate a coordinator crash while the player keeps
+     * its state. The host must drop all radio links and start a new engine after [restartAfterMs].
+     */
+    fun onCrashRequested(restartAfterMs: Long) {}
+    /** A test asked for a different rollback policy: the host restarts the engine with it. */
+    fun onPolicyRequested(rollback: Rollback) {}
 }
 
 /** What the engine needs from the radio layer (Nearby Connections on Android, in-memory in tests). */
@@ -116,6 +124,16 @@ class FaultPlan {
     @Volatile var killInPhase: Phase? = null
     /** Extra one-way delay added to every outgoing protocol message. */
     @Volatile var extraDelayMs: Long = 0
+    /** Stop this engine (coordinator crash, player survives) after persisting this phase; restart after [crashRestartMs]. */
+    @Volatile var crashInPhase: Phase? = null
+    @Volatile var crashRestartMs: Long = 0
+    /** Cut all links for [outageMs] right after persisting this phase, before its messages leave. */
+    @Volatile var outageInPhase: Phase? = null
+    @Volatile var outageMs: Long = 0
+    /** Send every protocol message twice (protocol-level duplicate, each sealed separately). */
+    @Volatile var duplicate = false
+    /** Report "no headset route" whatever the platform says. */
+    @Volatile var forceNoRoute = false
 
     @Synchronized fun dropNext(type: MsgType, count: Int = 1) { drops[type] = (drops[type] ?: 0) + count }
 
@@ -125,5 +143,9 @@ class FaultPlan {
         return true
     }
 
-    @Synchronized fun clear() { drops.clear(); killInPhase = null; extraDelayMs = 0 }
+    @Synchronized fun clear() {
+        drops.clear(); killInPhase = null; extraDelayMs = 0
+        crashInPhase = null; crashRestartMs = 0; outageInPhase = null; outageMs = 0
+        duplicate = false; forceNoRoute = false
+    }
 }

@@ -1,5 +1,6 @@
 package com.segue.app.ui
 
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -13,12 +14,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.segue.app.service.SegueService
 import com.segue.app.service.Background
 import com.segue.app.service.Permissions
+import com.segue.app.service.SegueService
 import com.segue.core.MsgType
 import com.segue.core.Phase
+import com.segue.engine.Campaign
 import com.segue.engine.EngineState
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -33,7 +39,9 @@ class MainActivity : ComponentActivity() {
             val s = (binder as SegueService.LocalBinder).service
             service = s
             s.addListener(listener)
-            ui = ui.copy(serviceRunning = true, extras = extras())
+            s.onCampaign = { st -> ui = ui.copy(campaign = st, logFiles = s.logFiles().size) }
+            ui = ui.copy(serviceRunning = true, extras = extras(), testMode = s.testMode,
+                campaign = s.campaignStatus, logFiles = s.logFiles().size)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -45,6 +53,23 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refreshEnvironment()
         if (ui.missingPermissions.isEmpty()) startAndBind()
+    }
+
+    /** The user picks where the ZIP goes (Downloads, Drive, ...); no storage permission is needed. */
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val s = service
+        if (uri != null && s != null) {
+            ui = ui.copy(notice = "Exporting…")
+            Thread {
+                val msg = try {
+                    val n = contentResolver.openOutputStream(uri)?.use { s.exportLogs(it) }
+                    if (n != null) "Saved $n log file(s) in one ZIP" else "Could not open the chosen file"
+                } catch (e: IOException) {
+                    "Export failed: ${e.message}"
+                }
+                runOnUiThread { ui = ui.copy(notice = msg) }
+            }.start()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,6 +87,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         service?.removeListener(listener)
+        service?.onCampaign = null
         if (bound) unbindService(connection)
         bound = false
         super.onDestroy()
@@ -73,7 +99,8 @@ class MainActivity : ComponentActivity() {
             bluetoothOn = Permissions.bluetoothOn(this),
             backgroundUnrestricted = Background.unrestricted(this),
             backgroundTips = Background.vendorTips(),
-            extras = extras()
+            extras = extras(),
+            logFiles = service?.logFiles()?.size ?: ui.logFiles
         )
     }
 
@@ -97,7 +124,7 @@ class MainActivity : ComponentActivity() {
         override fun openBatterySettings() {
             val ctx = this@MainActivity
             try { startActivity(Background.requestUnrestricted(ctx)) }
-            catch (e: android.content.ActivityNotFoundException) { startActivity(Background.appSettings(ctx)) }
+            catch (e: ActivityNotFoundException) { startActivity(Background.appSettings(ctx)) }
         }
         override fun play() { service?.engine?.play() }
         override fun pause() { service?.engine?.pause() }
@@ -118,11 +145,26 @@ class MainActivity : ComponentActivity() {
                 FaultKind.CLEAR -> f.clear()
             }
         }
-        override fun startBench(count: Int, peerId: Int) { service?.engine?.startBench(count, 20_000, peerId) }
-        override fun stopBench() { service?.engine?.stopBench() }
+        override fun setTestMode(on: Boolean) {
+            service?.testMode = on
+            ui = ui.copy(testMode = on)
+        }
+        override fun startCampaign(preset: Campaign.Preset, peerId: Int) { service?.campaign?.start(preset, peerId) }
+        override fun stopCampaign() { service?.campaign?.stop() }
+        override fun exportLogs() {
+            val label = ui.state?.label ?: "device"
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+            try { exportLauncher.launch(Describe.exportName(label, stamp)) }
+            catch (e: ActivityNotFoundException) { ui = ui.copy(notice = "No file picker is available on this device") }
+        }
+        override fun clearOldLogs() {
+            val s = service ?: return
+            val n = s.clearOldLogs()
+            ui = ui.copy(notice = "Deleted $n old log file(s)", logFiles = s.logFiles().size)
+        }
         override fun stopService() {
             this@MainActivity.startService(Intent(this@MainActivity, SegueService::class.java).setAction(SegueService.ACTION_STOP))
-            if (bound) { service?.removeListener(listener); unbindService(connection); bound = false }
+            if (bound) { service?.removeListener(listener); service?.onCampaign = null; unbindService(connection); bound = false }
             service = null
             ui = ui.copy(serviceRunning = false, state = null)
         }

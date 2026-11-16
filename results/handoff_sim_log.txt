@@ -5,9 +5,9 @@ fault_free       LEASE_SAFE    loss=0.00 skew=    0 part=0.00 crash=0.00  attemp
 fault_free       LEASE_NOFRESH loss=0.00 skew=    0 part=0.00 crash=0.00  attempts=150000 handed=100.00% kept=0.00% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=326
 loss_sweep       NAIVE         loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=149991 handed=92.15% kept=6.38% silent=0.045% dualCp=1.424% dual>=100ms=1.424% conflicts=2129  silP95=449
 loss_sweep       EXPIRY        loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=92.92% kept=7.08% silent=0.000% dualCp=0.000% dual>=100ms=1.120% conflicts=0  silP95=447
-loss_sweep       LEASE_RESUME  loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.000% dualCp=0.000% dual>=100ms=0.081% conflicts=0  silP95=504
-loss_sweep       LEASE_SAFE    loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=504
-loss_sweep       LEASE_NOFRESH loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.000% dualCp=0.000% dual>=100ms=0.082% conflicts=0  silP95=504
+loss_sweep       LEASE_RESUME  loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.001% dualCp=0.000% dual>=100ms=0.081% conflicts=0  silP95=504
+loss_sweep       LEASE_SAFE    loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.001% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=504
+loss_sweep       LEASE_NOFRESH loss=0.00 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.76% kept=8.24% silent=0.001% dualCp=0.000% dual>=100ms=0.082% conflicts=0  silP95=504
 loss_sweep       NAIVE         loss=0.02 skew= 1000 part=0.10 crash=0.02  attempts=149989 handed=92.03% kept=6.42% silent=0.051% dualCp=1.505% dual>=100ms=1.505% conflicts=2249  silP95=489
 loss_sweep       EXPIRY        loss=0.02 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=92.77% kept=7.23% silent=0.000% dualCp=0.000% dual>=100ms=1.151% conflicts=0  silP95=486
 loss_sweep       LEASE_RESUME  loss=0.02 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.55% kept=8.45% silent=0.000% dualCp=0.000% dual>=100ms=0.085% conflicts=0  silP95=536
@@ -20,9 +20,9 @@ loss_sweep       LEASE_SAFE    loss=0.05 skew= 1000 part=0.10 crash=0.02  attemp
 loss_sweep       LEASE_NOFRESH loss=0.05 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.44% kept=8.56% silent=0.000% dualCp=0.000% dual>=100ms=0.090% conflicts=0  silP95=563
 loss_sweep       NAIVE         loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=149982 handed=91.87% kept=6.49% silent=0.050% dualCp=1.586% dual>=100ms=1.588% conflicts=2372  silP95=578
 loss_sweep       EXPIRY        loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=92.33% kept=7.67% silent=0.000% dualCp=0.000% dual>=100ms=1.271% conflicts=0  silP95=567
-loss_sweep       LEASE_RESUME  loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.06% kept=8.94% silent=0.000% dualCp=0.000% dual>=100ms=0.079% conflicts=0  silP95=648
-loss_sweep       LEASE_SAFE    loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.05% kept=8.95% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=655
-loss_sweep       LEASE_NOFRESH loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.05% kept=8.95% silent=0.000% dualCp=0.000% dual>=100ms=0.079% conflicts=0  silP95=648
+loss_sweep       LEASE_RESUME  loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.06% kept=8.94% silent=0.001% dualCp=0.000% dual>=100ms=0.079% conflicts=0  silP95=648
+loss_sweep       LEASE_SAFE    loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.05% kept=8.95% silent=0.001% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=655
+loss_sweep       LEASE_NOFRESH loss=0.10 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.05% kept=8.95% silent=0.001% dualCp=0.000% dual>=100ms=0.079% conflicts=0  silP95=648
 loss_sweep       NAIVE         loss=0.20 skew= 1000 part=0.10 crash=0.02  attempts=149982 handed=91.59% kept=6.66% silent=0.038% dualCp=1.712% dual>=100ms=1.712% conflicts=2563  silP95=792
 loss_sweep       EXPIRY        loss=0.20 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=91.39% kept=8.61% silent=0.000% dualCp=0.000% dual>=100ms=1.417% conflicts=0  silP95=736
 loss_sweep       LEASE_RESUME  loss=0.20 skew= 1000 part=0.10 crash=0.02  attempts=150000 handed=90.02% kept=9.98% silent=0.000% dualCp=0.000% dual>=100ms=0.073% conflicts=0  silP95=831
@@ -80,9 +80,9 @@ crash_sweep      LEASE_SAFE    loss=0.05 skew= 1000 part=0.00 crash=0.05  attemp
 crash_sweep      LEASE_NOFRESH loss=0.05 skew= 1000 part=0.00 crash=0.05  attempts=150000 handed=93.54% kept=6.46% silent=0.000% dualCp=0.000% dual>=100ms=0.175% conflicts=0  silP95=504
 crash_sweep      NAIVE         loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=149967 handed=92.40% kept=6.15% silent=0.046% dualCp=1.408% dual>=100ms=1.409% conflicts=2102  silP95=520
 crash_sweep      EXPIRY        loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=92.89% kept=7.11% silent=0.000% dualCp=0.000% dual>=100ms=0.827% conflicts=0  silP95=517
-crash_sweep      LEASE_RESUME  loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.97% kept=8.03% silent=0.000% dualCp=0.000% dual>=100ms=0.359% conflicts=0  silP95=536
-crash_sweep      LEASE_SAFE    loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.97% kept=8.03% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=536
-crash_sweep      LEASE_NOFRESH loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.97% kept=8.03% silent=0.000% dualCp=0.000% dual>=100ms=0.361% conflicts=0  silP95=536
+crash_sweep      LEASE_RESUME  loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.97% kept=8.03% silent=0.001% dualCp=0.000% dual>=100ms=0.359% conflicts=0  silP95=536
+crash_sweep      LEASE_SAFE    loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.97% kept=8.03% silent=0.001% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=536
+crash_sweep      LEASE_NOFRESH loss=0.05 skew= 1000 part=0.00 crash=0.10  attempts=150000 handed=91.96% kept=8.03% silent=0.001% dualCp=0.000% dual>=100ms=0.361% conflicts=0  silP95=536
 partition_sweep  NAIVE         loss=0.05 skew= 1000 part=0.00 crash=0.00  attempts=150000 handed=94.86% kept=5.14% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=483
 partition_sweep  EXPIRY        loss=0.05 skew= 1000 part=0.00 crash=0.00  attempts=150000 handed=94.86% kept=5.14% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=478
 partition_sweep  LEASE_RESUME  loss=0.05 skew= 1000 part=0.00 crash=0.00  attempts=150000 handed=94.86% kept=5.14% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=478
@@ -118,4 +118,4 @@ delay_dup_stress EXPIRY        loss=0.10 skew= 1000 part=0.10 crash=0.00  attemp
 delay_dup_stress LEASE_RESUME  loss=0.10 skew= 1000 part=0.10 crash=0.00  attempts=150000 handed=89.64% kept=10.36% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=944
 delay_dup_stress LEASE_SAFE    loss=0.10 skew= 1000 part=0.10 crash=0.00  attempts=150000 handed=89.64% kept=10.36% silent=0.000% dualCp=0.000% dual>=100ms=0.000% conflicts=0  silP95=1048
 delay_dup_stress LEASE_NOFRESH loss=0.10 skew= 1000 part=0.10 crash=0.00  attempts=150000 handed=89.65% kept=10.35% silent=0.000% dualCp=0.000% dual>=100ms=0.217% conflicts=0  silP95=944
-done in 55s
+done in 42s
