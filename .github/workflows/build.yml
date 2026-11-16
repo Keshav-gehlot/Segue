@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Protocol and engine tests
+        run: |
+          set -o pipefail
+          ./gradlew :core:selfTest :engine:selfTest --stacktrace 2>&1 | tee tests.log
+
+      - name: Reproduce the paper's simulation
+        run: |
+          set -o pipefail
+          ./gradlew :core:experiments 2>&1 | tee experiments.log
+          cmp core/build/results/handoff_sim.csv results/handoff_sim.csv
+          echo "handoff_sim.csv is byte-identical to the committed results"
+
+      - name: Build the Android app
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --stacktrace 2>&1 | tee app.log
+
+      - name: Show errors
+        if: failure()
+        run: |
+          for f in tests.log experiments.log app.log; do
+            if [ -f "$f" ] && ! grep -q "BUILD SUCCESSFUL" "$f"; then python3 tools/ci/annotate.py "$f"; break; fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: segue-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
