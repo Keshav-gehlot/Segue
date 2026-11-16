@@ -1,5 +1,7 @@
 # Segue
 
+[![Build](https://github.com/Keshav-gehlot/Segue/actions/workflows/build.yml/badge.svg)](https://github.com/Keshav-gehlot/Segue/actions/workflows/build.yml)
+
 Segue moves music playback between Android devices that share multipoint Bluetooth earbuds.
 It uses break-before-make: the source pauses before the target starts, and the target resumes
 at the source's exact position. At most one device's player plays at a time, even when messages
@@ -22,7 +24,7 @@ results/  outputs of the simulation and security runs reported in the paper, and
 scripts/  analyze_handoffs.py (device logs), measure_audio.py (microphone recordings),
           make_figures.py (paper figures from results/)
 paper/    LaTeX source (IEEEtran), PDF, revision notes; history/ has the pre-review version
-tools/compile-check/  how the app code was type-checked without Google's Maven repository
+tools/compile-check/  offline type-check of the app code (used before CI existed); tools/ci/ helps CI report errors
 TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8)
 ```
 
@@ -32,10 +34,8 @@ TESTING.md  device test plan (vivo X80, iQOO 7, OnePlus Pad 3, realme Buds Air 8
 |---|---|
 | `:core` | Compiled and self-tests pass (20 checks). Additive change only: `exportState`/`importState` (+ `CoordinatorStateCodec`) and `allowHandoffHere()`. The full paper simulation was re-run after the change, and `handoff_sim.csv` is byte-for-byte identical. |
 | `:engine` | Compiled. 54 end-to-end checks pass, with simulated phones on a virtual clock running the real handshake, AES-GCM channel, coordinator and file persistence (`./gradlew :engine:selfTest`). |
-| App code using only the Android framework (service, player, route, identity, logs, permissions, notification) | Type-checked against the public SDK 36 `android.jar`. |
-| `NearbyTransport` | Type-checked against Java stubs of the documented Nearby Connections signatures (`tools/compile-check/stubs`). Not against the real library. |
-| Compose UI (`MainActivity`, `SegueScreen`) | **Not compiled.** The Compose compiler and runtime come from Google's Maven repository, which the build sandbox could not reach. |
-| Gradle build, APK, running on phones | **Not done.** Versions in `gradle/libs.versions.toml` were checked against release notes on 2026-11-16. The first build in Android Studio is the first real build. |
+| Android app (`:app`, including the Compose UI and the Nearby Connections binding) | **Builds.** GitHub Actions compiles it against the real libraries and produces a debug APK on every push (first green build: 16 Nov 2026). |
+| Running on devices | **Not done yet.** Nothing has run on a phone or tablet; `TESTING.md` is the plan. |
 | `scripts/analyze_handoffs.py` | Checked on the engine-test logs. It recovers the ground truth exactly: gap 270 ms, request-to-audible 390 ms. |
 | `scripts/measure_audio.py` | Checked on synthetic recordings with known gaps (250–410 ms), position errors (−40 to +100 ms) and a 6 dB level change between phones. All edges were within ±2 ms. |
 
@@ -50,7 +50,13 @@ adb -s <phoneA> install app/build/outputs/apk/debug/app-debug.apk
 adb -s <phoneB> install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-If the first sync fails on a version, use Android Studio's AGP Upgrade Assistant. The code does not depend on anything version-specific beyond Compose Material 3 basics.
+**Ready-made APK.** Every push is built by GitHub Actions. Open the latest green run under
+[Actions › Build](https://github.com/Keshav-gehlot/Segue/actions/workflows/build.yml), download the
+`segue-debug-apk` artifact (you must be signed in to GitHub), unzip it and install `app-debug.apk`.
+It is a debug build signed with a throwaway key, so install the same file on every device.
+
+The same workflow runs the protocol and engine tests and re-runs the paper's simulation, failing
+if the output differs from `results/handoff_sim.csv` by a single byte.
 
 ## Reproducing the paper's results
 
