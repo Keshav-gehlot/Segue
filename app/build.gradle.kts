@@ -12,8 +12,8 @@ android {
         applicationId = "com.segue.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.2"
+        versionCode = 7
+        versionName = "0.4.0"
         // Redirect URI of the Spotify developer app, segue://callback: the Spotify Auth library's
         // LoginActivity receives it.
         manifestPlaceholders["redirectSchemeName"] = "segue"

@@ -123,4 +123,93 @@ object Describe {
 
     fun canSendTo(s: EngineState, p: com.segue.engine.PeerView): Boolean =
         s.playing && s.iAmOwner && s.phase == "IDLE" && p.connected && p.status?.routeReady == true
+
+    // ------------------------------------------------------------------ revamped screens
+
+    enum class DeviceKind { PHONE, TABLET }
+
+    /** Tablets by name (OnePlus Pad, Galaxy Tab, …); everything else is drawn as a phone. */
+    fun deviceKind(label: String): DeviceKind =
+        if (Regex("\\b(pad|tab|tablet)\\b", RegexOption.IGNORE_CASE).containsMatchIn(label)) DeviceKind.TABLET else DeviceKind.PHONE
+
+    /** Where the music is: the hero card's headline and accent. */
+    enum class Where { HERE, ELSEWHERE, PAUSED_HERE, PAUSED_ELSEWHERE, NOWHERE }
+
+    fun where(s: EngineState): Where = when {
+        s.playing -> Where.HERE
+        s.iAmOwner -> Where.PAUSED_HERE
+        else -> {
+            val owner = s.peers.firstOrNull { it.id == s.ownerId }
+            when {
+                owner == null -> Where.NOWHERE
+                owner.status?.playing == true -> Where.ELSEWHERE
+                else -> Where.PAUSED_ELSEWHERE
+            }
+        }
+    }
+
+    fun ownerLabel(s: EngineState): String? = s.peers.firstOrNull { it.id == s.ownerId }?.label
+
+    /** Big line of the hero card. */
+    fun headline(s: EngineState): String = when (where(s)) {
+        Where.HERE -> "Playing here"
+        Where.PAUSED_HERE -> "Paused here"
+        Where.ELSEWHERE -> "Playing on ${ownerLabel(s)}"
+        Where.PAUSED_ELSEWHERE -> "Paused on ${ownerLabel(s)}"
+        Where.NOWHERE -> "Nothing playing"
+    }
+
+    /** A handoff in progress, in words, or null. */
+    fun busy(s: EngineState): String? = when (s.phase) {
+        "IDLE" -> null
+        "PREPARING", "SRC_PAUSING", "TRANSFERRING" -> "Handing over…"
+        "SRC_RECOVERY" -> "Taking the music back…"
+        "READY_SENT", "TGT_STARTING" -> "Starting here…"
+        "PROVISIONAL", "UNCERTAIN" -> "Confirming…"
+        "TGT_STOPPING" -> "Stopping…"
+        else -> "Working…"
+    }
+
+    /** Title and subtitle of the now-playing block. */
+    fun track(extras: UiExtras): Pair<String, String> {
+        val sp = extras.spotify ?: return "Test track" to "Built-in signal for measurements"
+        return when {
+            !sp.title.isNullOrBlank() -> sp.title to (sp.artist ?: "Spotify")
+            sp.connected -> "Nothing in Spotify yet" to "Play a song in Spotify on this device"
+            else -> "Spotify" to "Not connected"
+        }
+    }
+
+    /** One device tile on the Listen screen: can it receive the music, and if not, why. */
+    data class Tile(val enabled: Boolean, val line: String, val playingThere: Boolean)
+
+    fun tile(s: EngineState, p: com.segue.engine.PeerView): Tile {
+        val st = p.status
+        val playingThere = st?.playing == true
+        val line = when {
+            !p.connected -> "Not connected"
+            st == null -> "Connecting…"
+            playingThere -> "Playing now"
+            !st.routeReady -> "Earbuds not connected there"
+            !s.playing -> "Ready"
+            s.phase != "IDLE" -> "Busy"
+            else -> "Tap to send the music"
+        }
+        return Tile(canSendTo(s, p), line, playingThere)
+    }
+
+    fun peerDetail(p: com.segue.engine.PeerView): String {
+        if (!p.connected) return "Offline · reconnects when nearby"
+        val st = p.status ?: return "Connected"
+        val parts = mutableListOf(if (st.playing) "Playing" else "Idle", if (st.routeReady) "earbuds ready" else "earbuds not here")
+        p.rttMs?.let { parts += "$it ms" }
+        return parts.joinToString(" · ")
+    }
+
+    /** Short, readable fingerprint: groups of four. */
+    fun fingerprint(fp: String): String = fp.replace(":", "").chunked(4).take(4).joinToString(" ").uppercase()
+
+    /** Campaign progress as 0..1, for a progress bar. */
+    fun progress(c: CampaignStatus): Float =
+        if (c.total == 0) 0f else ((c.index + if (c.running) 0 else 1).toFloat() / c.total).coerceIn(0f, 1f)
 }
