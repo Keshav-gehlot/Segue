@@ -1,0 +1,23 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=33585 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+PASS  codec round-trips 10,000 random messages
+PASS  codec never throws on 10,000 random byte strings
+PASS  replay window: in-order accepted once, replays rejected
+PASS  replay window: within-window older sequence accepted once
+PASS  replay window: older than 64 rejected
+PASS  replay window: negative rejected
+PASS  HKDF-SHA256 matches RFC 5869 test case 1
+PASS  handshake between enrolled members succeeds
+PASS  channel delivers both directions
+PASS  rotating endpoint names: 1000 epochs all distinct
+PASS  rotating endpoint names: member matches current/adjacent epoch only
+PASS  rotating endpoint names: different group key does not match
+PASS  SAS: both sides compute the same 6-digit code
+PASS  SAS: 2000 substituted keys give a different code (collisions=0)
+PASS  LEASE_RESUME: fault-free handoffs all complete (6000/6000), no dual playback
+PASS  LEASE_SAFE: fault-free handoffs all complete (6000/6000), no dual playback
+PASS  LEASE_SAFE under harsh faults: zero dual playback over 15000 attempts, zero owner conflicts
+PASS  LEASE_RESUME under harsh faults without coordinator crashes: zero dual playback over 15000 attempts
+PASS  ablation sanity: removing freshness binding does produce dual playback (23 attempts)
+PASS  ablation sanity: naive variant does produce dual playback (512 attempts)
+
+ALL TESTS PASSED

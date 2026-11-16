@@ -1,0 +1,20 @@
+# Checked against release notes on 2026-11-16. AGP 9.1 needs Gradle >= 9.3.1 and supports
+# compileSdk 37; Compose 1.12 (BOM 2026.08.00) requires compileSdk 37 and AGP >= 9.1.1.
+[versions]
+agp = "9.1.1"
+kotlin = "2.3.10"
+composeBom = "2026.08.00"
+activityCompose = "1.13.0"
+playServicesNearby = "19.5.0"
+
+[libraries]
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+play-services-nearby = { group = "com.google.android.gms", name = "play-services-nearby", version.ref = "playServicesNearby" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

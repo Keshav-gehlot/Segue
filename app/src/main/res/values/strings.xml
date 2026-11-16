@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Segue</string>
+    <string name="channel_status">Segue status</string>
+    <string name="channel_status_desc">Shown while Segue keeps your phones in sync</string>
+    <string name="stop">Stop</string>
+</resources>

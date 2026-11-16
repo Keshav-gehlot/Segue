@@ -1,0 +1,22 @@
+test,case,attempts,accepted,detail
+handshake,honest members,500,500,expected=all
+handshake,outsider impersonates initiator,500,0,expected=0
+handshake,outsider impersonates responder,500,0,expected=0
+handshake,relay across two transport sessions,500,0,expected=0 (channel binding)
+handshake,single-bit flip in M1/M2/M3,500,0,expected=0
+channel,legitimate frames in order,2000,2000,expected=all; frame=135B payload=110B
+channel,replay of every earlier frame,2000,0,expected=0
+channel,random forged frames,200000,0,expected=0
+channel,single-bit tamper (header or body),100000,0,expected=0
+channel,untampered originals afterwards,2000,2000,expected=all (tamper attempts did not disturb state)
+channel,reflection to sender,2000,0,expected=0
+channel,cross-session replay,2000,0,expected=0
+channel,reordered within 64-frame window,640,640,expected=all
+desync,SG2 channel: max-counter forgeries,2000000,0,expected=0
+desync,SG2 channel: legit delivery after flood,1000,1000,expected=all
+desync,higher-only counter + 8-bit tag,200,200,forgeries_to_desync_mean=123 median=124 max=253; legit_delivered_after=0/20000
+desync,higher-only counter + 12-bit tag,200,200,forgeries_to_desync_mean=2186 median=2221 max=4083; legit_delivered_after=0/20000
+desync,higher-only counter + 16-bit tag,200,200,forgeries_to_desync_mean=33553 median=33189 max=65374; legit_delivered_after=0/20000
+desync,higher-only counter + 20-bit tag,40,40,forgeries_to_desync_mean=570769 median=586025 max=1035767; legit_delivered_after=0/4000
+cost,seal+open one handoff message,300000,300000,1.26 us per round trip on this JVM; overhead=25 bytes
+cost,full 3-message handshake (both sides),300,300,4.32 ms per handshake on this JVM
